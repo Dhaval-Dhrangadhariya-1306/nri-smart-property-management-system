@@ -3,6 +3,13 @@ const cors = require("cors");
 const helmet = require("helmet");
 require("dotenv").config();
 
+const authRoutes = require("./routes/authRoutes");
+const propertyRoutes = require("./routes/propertyRoutes");
+const monitoringRoutes = require("./routes/monitoringRoutes");
+const caretakerRoutes = require("./routes/caretakerRoutes");
+const inspectionRoutes = require("./routes/inspectionRoutes");
+const maintenanceRoutes = require("./routes/maintenanceRoutes");
+
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
 
@@ -32,6 +39,24 @@ app.get("/", (req, res) => {
     message: "NRI Smart Property Management System API is running",
   });
 });
+
+// Authentication routes
+app.use("/api/auth", authRoutes);
+
+// Property routes
+app.use("/api/properties", propertyRoutes);
+
+// Monitoring routes
+app.use("/api/monitoring", monitoringRoutes);
+
+// Caretaker routes
+app.use("/api/caretakers", caretakerRoutes);
+
+// Inspection routes
+app.use("/api/inspections", inspectionRoutes);
+
+// Maintenance routes
+app.use("/api/maintenance", maintenanceRoutes);
 
 // 404 handler
 app.use(notFound);
