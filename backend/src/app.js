@@ -9,6 +9,7 @@ const monitoringRoutes = require("./routes/monitoringRoutes");
 const caretakerRoutes = require("./routes/caretakerRoutes");
 const inspectionRoutes = require("./routes/inspectionRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
+const expenseRoutes = require("./routes/expenseRoutes");
 
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
@@ -17,10 +18,16 @@ const app = express();
 
 const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
 
-// Security middleware
+// ============================================================
+// SECURITY MIDDLEWARE
+// ============================================================
+
 app.use(helmet());
 
-// Cross-origin resource sharing
+// ============================================================
+// CROSS-ORIGIN RESOURCE SHARING
+// ============================================================
+
 app.use(
   cors({
     origin: corsOrigin,
@@ -28,17 +35,27 @@ app.use(
   }),
 );
 
-// Request parsing
+// ============================================================
+// REQUEST PARSING
+// ============================================================
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check
+// ============================================================
+// HEALTH CHECK
+// ============================================================
+
 app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
     message: "NRI Smart Property Management System API is running",
   });
 });
+
+// ============================================================
+// API ROUTES
+// ============================================================
 
 // Authentication routes
 app.use("/api/auth", authRoutes);
@@ -58,10 +75,19 @@ app.use("/api/inspections", inspectionRoutes);
 // Maintenance routes
 app.use("/api/maintenance", maintenanceRoutes);
 
-// 404 handler
+// Expense routes
+app.use("/api/expenses", expenseRoutes);
+
+// ============================================================
+// 404 HANDLER
+// ============================================================
+
 app.use(notFound);
 
-// Centralized error handler
+// ============================================================
+// CENTRALIZED ERROR HANDLER
+// ============================================================
+
 app.use(errorHandler);
 
 module.exports = app;
