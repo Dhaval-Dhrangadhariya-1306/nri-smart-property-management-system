@@ -1,6 +1,7 @@
 const express = require("express");
 
 const {
+  createCaretaker,
   assignCaretaker,
   getPropertyCaretakers,
   getCurrentCaretaker,
@@ -39,11 +40,13 @@ router.get(
 // OWNER / ADMIN CARETAKER MANAGEMENT
 // ============================================================
 
+// Create a new caretaker
+router.post("/create", authorize("NRI_OWNER", "ADMIN"), createCaretaker);
+
 // Assign caretaker to property
 router.post("/assign", authorize("NRI_OWNER", "ADMIN"), assignCaretaker);
 
-// Get complete caretaker assignment history
-// for a property
+// Get complete caretaker assignment history for a property
 router.get(
   "/property/:propertyId",
   authorize("NRI_OWNER", "ADMIN"),

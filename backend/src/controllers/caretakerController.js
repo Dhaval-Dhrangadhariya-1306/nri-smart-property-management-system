@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Property = require("../models/Property");
 const CaretakerAssignment = require("../models/CaretakerAssignment");
+const { hashPassword } = require("../utils/password");
 
 // ============================================================
 // HELPERS
@@ -81,6 +82,155 @@ const parseStartDate = (startDate) => {
   }
 
   return parsed;
+};
+
+// ============================================================
+// CREATE CARETAKER
+// POST /api/caretakers/create
+// ============================================================
+
+const createCaretaker = async (req, res, next) => {
+  try {
+    const { name, email, password, phone } = req.body;
+
+    // --------------------------------------------------------
+    // Required fields
+    // --------------------------------------------------------
+
+    if (!name || !email || !password) {
+      return next(createError("Name, email and password are required", 400));
+    }
+
+    // --------------------------------------------------------
+    // Normalize input
+    // --------------------------------------------------------
+
+    if (typeof name !== "string") {
+      return next(createError("Name must be a string", 400));
+    }
+
+    if (typeof email !== "string") {
+      return next(createError("Email must be a string", 400));
+    }
+
+    if (typeof password !== "string") {
+      return next(createError("Password must be a string", 400));
+    }
+
+    const trimmedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // --------------------------------------------------------
+    // Validate name
+    // --------------------------------------------------------
+
+    if (trimmedName.length < 2) {
+      return next(createError("Name must be at least 2 characters", 400));
+    }
+
+    if (trimmedName.length > 100) {
+      return next(createError("Name cannot exceed 100 characters", 400));
+    }
+
+    // --------------------------------------------------------
+    // Validate email
+    // --------------------------------------------------------
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(normalizedEmail)) {
+      return next(createError("Please provide a valid email address", 400));
+    }
+
+    // --------------------------------------------------------
+    // Validate password
+    // --------------------------------------------------------
+
+    if (password.length < 8) {
+      return next(createError("Password must be at least 8 characters", 400));
+    }
+
+    // --------------------------------------------------------
+    // Validate phone if provided
+    // --------------------------------------------------------
+
+    let cleanPhone = null;
+
+    if (phone !== undefined && phone !== null) {
+      if (typeof phone !== "string") {
+        return next(createError("Phone must be a string", 400));
+      }
+
+      cleanPhone = phone.trim();
+
+      if (cleanPhone.length > 20) {
+        return next(
+          createError("Phone number cannot exceed 20 characters", 400),
+        );
+      }
+    }
+
+    // --------------------------------------------------------
+    // Check duplicate email
+    // --------------------------------------------------------
+
+    const existingUser = await User.findOne({
+      email: normalizedEmail,
+    });
+
+    if (existingUser) {
+      return next(createError("A user with this email already exists", 409));
+    }
+
+    // --------------------------------------------------------
+    // Hash password
+    // --------------------------------------------------------
+
+    const hashedPassword = await hashPassword(password);
+
+    // --------------------------------------------------------
+    // Create caretaker
+    // --------------------------------------------------------
+
+    const caretaker = await User.create({
+      name: trimmedName,
+      email: normalizedEmail,
+      password: hashedPassword,
+      role: "CARETAKER",
+      isActive: true,
+      isEmailVerified: false,
+      phone: cleanPhone,
+    });
+
+    // --------------------------------------------------------
+    // Safe response
+    // Never return password
+    // --------------------------------------------------------
+
+    return res.status(201).json({
+      success: true,
+      message: "Caretaker created successfully",
+      data: {
+        caretaker: {
+          id: caretaker._id,
+          name: caretaker.name,
+          email: caretaker.email,
+          role: caretaker.role,
+          isActive: caretaker.isActive,
+          isEmailVerified: caretaker.isEmailVerified,
+          phone: caretaker.phone,
+          createdAt: caretaker.createdAt,
+        },
+      },
+    });
+  } catch (error) {
+    // MongoDB duplicate-key protection
+    if (error.code === 11000) {
+      return next(createError("A user with this email already exists", 409));
+    }
+
+    next(error);
+  }
 };
 
 // ============================================================
@@ -680,6 +830,7 @@ const getCaretakerAssignmentHistory = async (req, res, next) => {
 // ============================================================
 
 module.exports = {
+  createCaretaker,
   assignCaretaker,
   getPropertyCaretakers,
   getCurrentCaretaker,
