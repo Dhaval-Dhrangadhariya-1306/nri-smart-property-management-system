@@ -3,6 +3,10 @@ const cors = require("cors");
 const helmet = require("helmet");
 require("dotenv").config();
 
+// ============================================================
+// ROUTES
+// ============================================================
+
 const authRoutes = require("./routes/authRoutes");
 const propertyRoutes = require("./routes/propertyRoutes");
 const monitoringRoutes = require("./routes/monitoringRoutes");
@@ -10,6 +14,11 @@ const caretakerRoutes = require("./routes/caretakerRoutes");
 const inspectionRoutes = require("./routes/inspectionRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
+const documentRoutes = require("./routes/documentRoutes");
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
@@ -78,6 +87,9 @@ app.use("/api/maintenance", maintenanceRoutes);
 // Expense routes
 app.use("/api/expenses", expenseRoutes);
 
+// Document Vault routes
+app.use("/api/documents", documentRoutes);
+
 // ============================================================
 // 404 HANDLER
 // ============================================================
@@ -89,5 +101,9 @@ app.use(notFound);
 // ============================================================
 
 app.use(errorHandler);
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = app;
