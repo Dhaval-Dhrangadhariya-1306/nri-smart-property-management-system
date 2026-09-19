@@ -16,6 +16,7 @@ const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const documentRoutes = require("./routes/documentRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 
 // ============================================================
 // MIDDLEWARE
@@ -23,6 +24,10 @@ const notificationRoutes = require("./routes/notificationRoutes");
 
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
+
+// ============================================================
+// APP INITIALIZATION
+// ============================================================
 
 const app = express();
 
@@ -35,7 +40,7 @@ const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
 app.use(helmet());
 
 // ============================================================
-// CROSS-ORIGIN RESOURCE SHARING
+// CORS
 // ============================================================
 
 app.use(
@@ -67,32 +72,25 @@ app.get("/", (req, res) => {
 // API ROUTES
 // ============================================================
 
-// Authentication routes
 app.use("/api/auth", authRoutes);
 
-// Property routes
 app.use("/api/properties", propertyRoutes);
 
-// Monitoring routes
 app.use("/api/monitoring", monitoringRoutes);
 
-// Caretaker routes
 app.use("/api/caretakers", caretakerRoutes);
 
-// Inspection routes
 app.use("/api/inspections", inspectionRoutes);
 
-// Maintenance routes
 app.use("/api/maintenance", maintenanceRoutes);
 
-// Expense routes
 app.use("/api/expenses", expenseRoutes);
 
-// Document Vault routes
 app.use("/api/documents", documentRoutes);
 
-// Notification & Alert routes
 app.use("/api/notifications", notificationRoutes);
+
+app.use("/api/dashboard", dashboardRoutes);
 
 // ============================================================
 // 404 HANDLER
