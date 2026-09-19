@@ -15,6 +15,7 @@ const inspectionRoutes = require("./routes/inspectionRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const documentRoutes = require("./routes/documentRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 
 // ============================================================
 // MIDDLEWARE
@@ -89,6 +90,9 @@ app.use("/api/expenses", expenseRoutes);
 
 // Document Vault routes
 app.use("/api/documents", documentRoutes);
+
+// Notification & Alert routes
+app.use("/api/notifications", notificationRoutes);
 
 // ============================================================
 // 404 HANDLER
