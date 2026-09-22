@@ -5,6 +5,7 @@ const {
   getPropertyIntelligence,
   getFinancialDashboard,
   getPropertyHealthDashboard,
+  getCaretakerPerformanceDashboard,
 } = require("../controllers/dashboardController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -55,7 +56,13 @@ router.get(
 );
 
 // ============================================================
-// EXPORT
+// CARETAKER PERFORMANCE DASHBOARD
 // ============================================================
+
+router.get(
+  "/caretaker-performance",
+  authorize("NRI_OWNER", "ADMIN"),
+  getCaretakerPerformanceDashboard,
+);
 
 module.exports = router;

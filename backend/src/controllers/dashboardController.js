@@ -7,6 +7,7 @@ const MonitoringEvent = require("../models/MonitoringEvent");
 const Expense = require("../models/Expense");
 const Document = require("../models/Document");
 const Notification = require("../models/Notification");
+const CaretakerAssignment = require("../models/CaretakerAssignment");
 
 // ============================================================
 // OWNER DASHBOARD
@@ -1198,6 +1199,7 @@ const getPropertyHealthDashboard = async (req, res, next) => {
         {
           $sort: {
             property: 1,
+
             inspectedAt: -1,
           },
         },
@@ -1212,15 +1214,18 @@ const getPropertyHealthDashboard = async (req, res, next) => {
           },
         },
 
-        // ------------------------------------------------------
+        // ----------------------------------------------------
         // POPULATE CARETAKER
-        // ------------------------------------------------------
+        // ----------------------------------------------------
 
         {
           $lookup: {
             from: "users",
+
             localField: "latestInspection.caretaker",
+
             foreignField: "_id",
+
             as: "latestCaretaker",
           },
         },
@@ -1228,6 +1233,7 @@ const getPropertyHealthDashboard = async (req, res, next) => {
         {
           $unwind: {
             path: "$latestCaretaker",
+
             preserveNullAndEmptyArrays: true,
           },
         },
@@ -1236,8 +1242,11 @@ const getPropertyHealthDashboard = async (req, res, next) => {
           $set: {
             "latestInspection.caretaker": {
               _id: "$latestCaretaker._id",
+
               name: "$latestCaretaker.name",
+
               email: "$latestCaretaker.email",
+
               role: "$latestCaretaker.role",
             },
           },
@@ -1498,7 +1507,6 @@ const getPropertyHealthDashboard = async (req, res, next) => {
     const latestInspectionMap = new Map(
       latestInspectionStats.map((item) => [
         item._id.toString(),
-
         item.latestInspection,
       ]),
     );
@@ -1723,6 +1731,390 @@ const getPropertyHealthDashboard = async (req, res, next) => {
 };
 
 // ============================================================
+// CARETAKER PERFORMANCE DASHBOARD
+// ============================================================
+
+const getCaretakerPerformanceDashboard = async (req, res, next) => {
+  try {
+    const ownerId = req.user.userId;
+
+    // --------------------------------------------------------
+    // OWNER PROPERTIES
+    // --------------------------------------------------------
+
+    const properties = await Property.find({
+      owner: ownerId,
+      isActive: true,
+    })
+      .select("_id title propertyType address status")
+      .lean();
+
+    const propertyIds = properties.map((property) => property._id);
+
+    // --------------------------------------------------------
+    // EMPTY DASHBOARD
+    // --------------------------------------------------------
+
+    if (propertyIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+
+        message: "Caretaker performance dashboard retrieved successfully",
+
+        data: {
+          summary: {
+            totalCaretakers: 0,
+            activeCaretakers: 0,
+            totalAssignments: 0,
+            activeAssignments: 0,
+            totalInspections: 0,
+            totalMaintenanceRequests: 0,
+            completedMaintenanceRequests: 0,
+            openMaintenanceRequests: 0,
+          },
+
+          caretakers: [],
+        },
+      });
+    }
+
+    // --------------------------------------------------------
+    // CARETAKER ASSIGNMENTS
+    // --------------------------------------------------------
+
+    const assignments = await CaretakerAssignment.find({
+      property: {
+        $in: propertyIds,
+      },
+    })
+      .populate("caretaker", "name email role isActive")
+      .populate("property", "title propertyType")
+      .sort({
+        assignedAt: -1,
+      })
+      .lean();
+
+    // --------------------------------------------------------
+    // INSPECTIONS
+    // --------------------------------------------------------
+
+    const inspections = await Inspection.find({
+      property: {
+        $in: propertyIds,
+      },
+
+      status: "COMPLETED",
+    })
+      .populate("caretaker", "name email role isActive")
+      .populate("property", "title propertyType")
+      .select(
+        "property caretaker overallCondition securityStatus electricalStatus plumbingStatus cleanliness issuesFound inspectedAt status",
+      )
+      .sort({
+        inspectedAt: -1,
+      })
+      .lean();
+
+    // --------------------------------------------------------
+    // MAINTENANCE
+    // --------------------------------------------------------
+
+    const maintenanceRequests = await MaintenanceRequest.find({
+      property: {
+        $in: propertyIds,
+      },
+
+      assignedCaretaker: {
+        $ne: null,
+      },
+    })
+      .populate("assignedCaretaker", "name email role isActive")
+      .populate("property", "title propertyType")
+      .select(
+        "property assignedCaretaker title category priority status estimatedCost actualCost assignedAt startedAt completedAt createdAt updatedAt",
+      )
+      .sort({
+        createdAt: -1,
+      })
+      .lean();
+
+    // --------------------------------------------------------
+    // INSPECTION SCORE MAPPING
+    // --------------------------------------------------------
+
+    const inspectionScores = {
+      EXCELLENT: 100,
+      GOOD: 85,
+      FAIR: 70,
+      POOR: 45,
+      CRITICAL: 20,
+    };
+
+    // --------------------------------------------------------
+    // BUILD CARETAKER MAP
+    // --------------------------------------------------------
+
+    const caretakerMap = new Map();
+
+    const ensureCaretaker = (caretaker) => {
+      if (!caretaker?._id) {
+        return null;
+      }
+
+      const caretakerId = caretaker._id.toString();
+
+      if (!caretakerMap.has(caretakerId)) {
+        caretakerMap.set(caretakerId, {
+          caretaker,
+          assignments: [],
+          inspections: [],
+          maintenance: [],
+        });
+      }
+
+      return caretakerMap.get(caretakerId);
+    };
+
+    // --------------------------------------------------------
+    // ASSIGNMENTS
+    // --------------------------------------------------------
+
+    assignments.forEach((assignment) => {
+      const caretakerData = ensureCaretaker(assignment.caretaker);
+
+      if (!caretakerData) {
+        return;
+      }
+
+      caretakerData.assignments.push(assignment);
+    });
+
+    // --------------------------------------------------------
+    // INSPECTIONS
+    // --------------------------------------------------------
+
+    inspections.forEach((inspection) => {
+      const caretakerData = ensureCaretaker(inspection.caretaker);
+
+      if (!caretakerData) {
+        return;
+      }
+
+      caretakerData.inspections.push(inspection);
+    });
+
+    // --------------------------------------------------------
+    // MAINTENANCE
+    // --------------------------------------------------------
+
+    maintenanceRequests.forEach((request) => {
+      const caretakerData = ensureCaretaker(request.assignedCaretaker);
+
+      if (!caretakerData) {
+        return;
+      }
+
+      caretakerData.maintenance.push(request);
+    });
+
+    // --------------------------------------------------------
+    // BUILD CARETAKER PERFORMANCE
+    // --------------------------------------------------------
+
+    const caretakers = Array.from(caretakerMap.values()).map((data) => {
+      const { caretaker, assignments, inspections, maintenance } = data;
+
+      const activeAssignments = assignments.filter(
+        (assignment) => assignment.status === "ACTIVE",
+      );
+
+      const completedMaintenance = maintenance.filter(
+        (request) => request.status === "COMPLETED",
+      );
+
+      const openMaintenance = maintenance.filter(
+        (request) => !["COMPLETED", "CANCELLED"].includes(request.status),
+      );
+
+      const highPriorityMaintenance = maintenance.filter((request) =>
+        ["HIGH", "URGENT", "CRITICAL"].includes(request.priority),
+      );
+
+      const inspectionScoreTotal = inspections.reduce(
+        (sum, inspection) =>
+          sum + (inspectionScores[inspection.overallCondition] || 0),
+
+        0,
+      );
+
+      const averageInspectionScore =
+        inspections.length > 0
+          ? Number((inspectionScoreTotal / inspections.length).toFixed(2))
+          : 0;
+
+      const completionRate =
+        maintenance.length > 0
+          ? Number(
+              (
+                (completedMaintenance.length / maintenance.length) *
+                100
+              ).toFixed(2),
+            )
+          : 0;
+
+      const assignedPropertyIds = [
+        ...new Set(
+          assignments
+            .filter((assignment) => assignment.property?._id)
+            .map((assignment) => assignment.property._id.toString()),
+        ),
+      ];
+
+      const recentActivity = [
+        ...inspections.map((inspection) => ({
+          type: "INSPECTION",
+
+          date: inspection.inspectedAt,
+
+          title: "Property inspection completed",
+
+          property: inspection.property,
+
+          data: inspection,
+        })),
+
+        ...maintenance.map((request) => ({
+          type: "MAINTENANCE",
+
+          date: request.updatedAt || request.createdAt,
+
+          title: request.title,
+
+          property: request.property,
+
+          data: request,
+        })),
+
+        ...assignments.map((assignment) => ({
+          type: "ASSIGNMENT",
+
+          date: assignment.assignedAt,
+
+          title: "Property assignment",
+
+          property: assignment.property,
+
+          data: assignment,
+        })),
+      ]
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 10);
+
+      return {
+        caretaker: {
+          _id: caretaker._id,
+
+          name: caretaker.name,
+
+          email: caretaker.email,
+
+          role: caretaker.role,
+
+          isActive: caretaker.isActive,
+        },
+
+        assignedProperties: assignedPropertyIds.length,
+
+        activeAssignments: activeAssignments.length,
+
+        inspections: {
+          total: inspections.length,
+
+          averageInspectionScore,
+        },
+
+        maintenance: {
+          total: maintenance.length,
+
+          completed: completedMaintenance.length,
+
+          open: openMaintenance.length,
+
+          highPriority: highPriorityMaintenance.length,
+
+          completionRate,
+        },
+
+        recentActivity,
+      };
+    });
+
+    // --------------------------------------------------------
+    // SUMMARY
+    // --------------------------------------------------------
+
+    const uniqueCaretakerIds = new Set(
+      assignments
+        .filter((assignment) => assignment.caretaker?._id)
+        .map((assignment) => assignment.caretaker._id.toString()),
+    );
+
+    const activeCaretakerIds = new Set(
+      assignments
+        .filter(
+          (assignment) =>
+            assignment.status === "ACTIVE" && assignment.caretaker?._id,
+        )
+        .map((assignment) => assignment.caretaker._id.toString()),
+    );
+
+    const completedMaintenanceRequests = maintenanceRequests.filter(
+      (request) => request.status === "COMPLETED",
+    ).length;
+
+    const openMaintenanceRequests = maintenanceRequests.filter(
+      (request) => !["COMPLETED", "CANCELLED"].includes(request.status),
+    ).length;
+
+    // --------------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Caretaker performance dashboard retrieved successfully",
+
+      data: {
+        summary: {
+          totalCaretakers: uniqueCaretakerIds.size,
+
+          activeCaretakers: activeCaretakerIds.size,
+
+          totalAssignments: assignments.length,
+
+          activeAssignments: assignments.filter(
+            (assignment) => assignment.status === "ACTIVE",
+          ).length,
+
+          totalInspections: inspections.length,
+
+          totalMaintenanceRequests: maintenanceRequests.length,
+
+          completedMaintenanceRequests,
+
+          openMaintenanceRequests,
+        },
+
+        caretakers,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
@@ -1731,4 +2123,5 @@ module.exports = {
   getPropertyIntelligence,
   getFinancialDashboard,
   getPropertyHealthDashboard,
+  getCaretakerPerformanceDashboard,
 };
