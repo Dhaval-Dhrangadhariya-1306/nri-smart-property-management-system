@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 
 const Property = require("../models/Property");
-const CaretakerAssignment = require("../models/CaretakerAssignment");
 const Inspection = require("../models/Inspection");
 const MaintenanceRequest = require("../models/MaintenanceRequest");
 const MonitoringEvent = require("../models/MonitoringEvent");
@@ -60,18 +59,21 @@ const getOwnerDashboard = async (req, res, next) => {
             totalProperties: 0,
             totalMaintenanceRequests: 0,
             openMaintenanceRequests: 0,
+            completedMaintenanceRequests: 0,
             criticalMonitoringEvents: 0,
+            highMonitoringEvents: 0,
+            unresolvedMonitoringEvents: 0,
             totalExpenses: 0,
+            totalExpenseAmount: 0,
             unreadNotifications: 0,
             documentsExpiringSoon: 0,
           },
 
           propertyHealth: {
             averageScore: 0,
-            excellent: 0,
             good: 0,
             fair: 0,
-            poor: 0,
+            needsAttention: 0,
             critical: 0,
           },
 
@@ -95,7 +97,10 @@ const getOwnerDashboard = async (req, res, next) => {
       {
         $group: {
           _id: null,
-          total: { $sum: 1 },
+
+          total: {
+            $sum: 1,
+          },
 
           open: {
             $sum: {
@@ -114,7 +119,13 @@ const getOwnerDashboard = async (req, res, next) => {
 
           completed: {
             $sum: {
-              $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$status", "COMPLETED"],
+                },
+                1,
+                0,
+              ],
             },
           },
         },
@@ -138,13 +149,25 @@ const getOwnerDashboard = async (req, res, next) => {
 
           critical: {
             $sum: {
-              $cond: [{ $eq: ["$severity", "CRITICAL"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$severity", "CRITICAL"],
+                },
+                1,
+                0,
+              ],
             },
           },
 
           high: {
             $sum: {
-              $cond: [{ $eq: ["$severity", "HIGH"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$severity", "HIGH"],
+                },
+                1,
+                0,
+              ],
             },
           },
 
@@ -163,14 +186,21 @@ const getOwnerDashboard = async (req, res, next) => {
       {
         $match: {
           property: { $in: propertyIds },
+          owner: ownerId,
           isActive: true,
         },
       },
       {
         $group: {
           _id: null,
-          totalAmount: { $sum: "$amount" },
-          totalExpenses: { $sum: 1 },
+
+          totalAmount: {
+            $sum: "$amount",
+          },
+
+          totalExpenses: {
+            $sum: 1,
+          },
         },
       },
     ]);
@@ -224,27 +254,51 @@ const getOwnerDashboard = async (req, res, next) => {
             $avg: "$health.score",
           },
 
-          excellent: {
+          good: {
             $sum: {
-              $cond: [{ $eq: ["$condition", "GOOD"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$condition", "GOOD"],
+                },
+                1,
+                0,
+              ],
             },
           },
 
           fair: {
             $sum: {
-              $cond: [{ $eq: ["$condition", "FAIR"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$condition", "FAIR"],
+                },
+                1,
+                0,
+              ],
             },
           },
 
           needsAttention: {
             $sum: {
-              $cond: [{ $eq: ["$condition", "NEEDS_ATTENTION"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$condition", "NEEDS_ATTENTION"],
+                },
+                1,
+                0,
+              ],
             },
           },
 
           critical: {
             $sum: {
-              $cond: [{ $eq: ["$condition", "CRITICAL"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$condition", "CRITICAL"],
+                },
+                1,
+                0,
+              ],
             },
           },
         },
@@ -273,6 +327,10 @@ const getOwnerDashboard = async (req, res, next) => {
     })
       .populate("property", "title")
       .populate("assignedCaretaker", "name email")
+      .populate(
+        "assignedVendor",
+        "name companyName category phone email status rating",
+      )
       .sort({ createdAt: -1 })
       .limit(5)
       .lean();
@@ -295,6 +353,7 @@ const getOwnerDashboard = async (req, res, next) => {
 
     const recentExpenses = await Expense.find({
       property: { $in: propertyIds },
+      owner: ownerId,
       isActive: true,
     })
       .populate("property", "title")
@@ -344,7 +403,7 @@ const getOwnerDashboard = async (req, res, next) => {
 
     const health = healthStats[0] || {
       averageScore: 0,
-      excellent: 0,
+      good: 0,
       fair: 0,
       needsAttention: 0,
       critical: 0,
@@ -385,7 +444,7 @@ const getOwnerDashboard = async (req, res, next) => {
         propertyHealth: {
           averageScore: Number((health.averageScore || 0).toFixed(2)),
 
-          good: health.excellent || 0,
+          good: health.good || 0,
 
           fair: health.fair || 0,
 
@@ -449,7 +508,9 @@ const getPropertyIntelligence = async (req, res, next) => {
         $group: {
           _id: null,
 
-          total: { $sum: 1 },
+          total: {
+            $sum: 1,
+          },
 
           open: {
             $sum: {
@@ -477,7 +538,9 @@ const getPropertyIntelligence = async (req, res, next) => {
                         ["OPEN", "ASSIGNED", "IN_PROGRESS", "ON_HOLD"],
                       ],
                     },
-                    { $eq: ["$priority", "URGENT"] },
+                    {
+                      $eq: ["$priority", "URGENT"],
+                    },
                   ],
                 },
                 1,
@@ -504,17 +567,31 @@ const getPropertyIntelligence = async (req, res, next) => {
         $group: {
           _id: null,
 
-          total: { $sum: 1 },
+          total: {
+            $sum: 1,
+          },
 
           critical: {
             $sum: {
-              $cond: [{ $eq: ["$severity", "CRITICAL"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$severity", "CRITICAL"],
+                },
+                1,
+                0,
+              ],
             },
           },
 
           high: {
             $sum: {
-              $cond: [{ $eq: ["$severity", "HIGH"] }, 1, 0],
+              $cond: [
+                {
+                  $eq: ["$severity", "HIGH"],
+                },
+                1,
+                0,
+              ],
             },
           },
         },
@@ -529,14 +606,21 @@ const getPropertyIntelligence = async (req, res, next) => {
       {
         $match: {
           property: propertyObjectId,
+          owner: new mongoose.Types.ObjectId(req.user.userId),
           isActive: true,
         },
       },
       {
         $group: {
           _id: null,
-          totalAmount: { $sum: "$amount" },
-          totalExpenses: { $sum: 1 },
+
+          totalAmount: {
+            $sum: "$amount",
+          },
+
+          totalExpenses: {
+            $sum: 1,
+          },
         },
       },
     ]);
@@ -562,14 +646,18 @@ const getPropertyIntelligence = async (req, res, next) => {
         $group: {
           _id: null,
 
-          total: { $sum: 1 },
+          total: {
+            $sum: 1,
+          },
 
           expiringSoon: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $ne: ["$expiryDate", null] },
+                    {
+                      $ne: ["$expiryDate", null],
+                    },
                     {
                       $gte: ["$expiryDate", now],
                     },
@@ -606,6 +694,10 @@ const getPropertyIntelligence = async (req, res, next) => {
       property: propertyObjectId,
     })
       .populate("assignedCaretaker", "name email")
+      .populate(
+        "assignedVendor",
+        "name companyName category phone email status rating",
+      )
       .sort({ createdAt: -1 })
       .limit(5)
       .lean();
@@ -627,6 +719,7 @@ const getPropertyIntelligence = async (req, res, next) => {
 
     const recentExpenses = await Expense.find({
       property: propertyObjectId,
+      owner: new mongoose.Types.ObjectId(req.user.userId),
       isActive: true,
     })
       .sort({ expenseDate: -1 })
@@ -640,6 +733,7 @@ const getPropertyIntelligence = async (req, res, next) => {
     let intelligenceScore = property.health?.score || 0;
 
     const maintenance = maintenanceStats[0] || {};
+
     const monitoring = monitoringStats[0] || {};
 
     if (maintenance.urgent > 0) {
@@ -708,10 +802,487 @@ const getPropertyIntelligence = async (req, res, next) => {
 };
 
 // ============================================================
+// GET FINANCIAL DASHBOARD
+// ============================================================
+
+const getFinancialDashboard = async (req, res, next) => {
+  try {
+    const ownerId = new mongoose.Types.ObjectId(req.user.userId);
+
+    // --------------------------------------------------------
+    // Get owner's active properties
+    // --------------------------------------------------------
+
+    const properties = await Property.find({
+      owner: ownerId,
+      isActive: true,
+      status: "ACTIVE",
+    })
+      .select("_id title propertyType")
+      .lean();
+
+    const propertyIds = properties.map((property) => property._id);
+
+    // --------------------------------------------------------
+    // No properties
+    // --------------------------------------------------------
+
+    if (propertyIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+
+        dashboard: {
+          summary: {
+            totalExpenses: 0,
+            expenseCount: 0,
+            averageExpense: 0,
+            paidAmount: 0,
+            pendingAmount: 0,
+            partiallyPaidAmount: 0,
+            cancelledAmount: 0,
+          },
+
+          expenseByCategory: [],
+
+          monthlyTrend: [],
+
+          paymentStatusBreakdown: [],
+
+          propertySpending: [],
+
+          maintenanceCosts: {
+            totalRequests: 0,
+            estimatedCost: 0,
+            actualCost: 0,
+            openEstimatedCost: 0,
+            completedActualCost: 0,
+          },
+
+          recentExpenses: [],
+
+          topExpenses: [],
+        },
+      });
+    }
+
+    // --------------------------------------------------------
+    // Expense filter
+    // --------------------------------------------------------
+
+    const expenseMatch = {
+      owner: ownerId,
+      property: {
+        $in: propertyIds,
+      },
+      isActive: true,
+    };
+
+    // --------------------------------------------------------
+    // Financial summary
+    // --------------------------------------------------------
+
+    const summaryStats = await Expense.aggregate([
+      {
+        $match: expenseMatch,
+      },
+
+      {
+        $group: {
+          _id: null,
+
+          totalExpenses: {
+            $sum: "$amount",
+          },
+
+          expenseCount: {
+            $sum: 1,
+          },
+
+          averageExpense: {
+            $avg: "$amount",
+          },
+
+          paidAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $eq: ["$paymentStatus", "PAID"],
+                },
+                "$amount",
+                0,
+              ],
+            },
+          },
+
+          pendingAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $eq: ["$paymentStatus", "PENDING"],
+                },
+                "$amount",
+                0,
+              ],
+            },
+          },
+
+          partiallyPaidAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $eq: ["$paymentStatus", "PARTIALLY_PAID"],
+                },
+                "$amount",
+                0,
+              ],
+            },
+          },
+
+          cancelledAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $eq: ["$paymentStatus", "CANCELLED"],
+                },
+                "$amount",
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    // --------------------------------------------------------
+    // Expense by category
+    // --------------------------------------------------------
+
+    const expenseByCategory = await Expense.aggregate([
+      {
+        $match: expenseMatch,
+      },
+
+      {
+        $group: {
+          _id: "$category",
+
+          amount: {
+            $sum: "$amount",
+          },
+
+          count: {
+            $sum: 1,
+          },
+        },
+      },
+
+      {
+        $sort: {
+          amount: -1,
+        },
+      },
+    ]);
+
+    // --------------------------------------------------------
+    // Monthly spending trend
+    // Last 12 months
+    // --------------------------------------------------------
+
+    const now = new Date();
+
+    const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+
+    const monthlyTrend = await Expense.aggregate([
+      {
+        $match: {
+          ...expenseMatch,
+
+          expenseDate: {
+            $gte: twelveMonthsAgo,
+            $lte: now,
+          },
+        },
+      },
+
+      {
+        $group: {
+          _id: {
+            year: {
+              $year: "$expenseDate",
+            },
+
+            month: {
+              $month: "$expenseDate",
+            },
+          },
+
+          amount: {
+            $sum: "$amount",
+          },
+
+          count: {
+            $sum: 1,
+          },
+        },
+      },
+
+      {
+        $sort: {
+          "_id.year": 1,
+          "_id.month": 1,
+        },
+      },
+    ]);
+
+    // --------------------------------------------------------
+    // Payment status breakdown
+    // --------------------------------------------------------
+
+    const paymentStatusBreakdown = await Expense.aggregate([
+      {
+        $match: expenseMatch,
+      },
+
+      {
+        $group: {
+          _id: "$paymentStatus",
+
+          amount: {
+            $sum: "$amount",
+          },
+
+          count: {
+            $sum: 1,
+          },
+        },
+      },
+
+      {
+        $sort: {
+          amount: -1,
+        },
+      },
+    ]);
+
+    // --------------------------------------------------------
+    // Spending by property
+    // --------------------------------------------------------
+
+    const propertySpending = await Expense.aggregate([
+      {
+        $match: expenseMatch,
+      },
+
+      {
+        $group: {
+          _id: "$property",
+
+          totalAmount: {
+            $sum: "$amount",
+          },
+
+          expenseCount: {
+            $sum: 1,
+          },
+        },
+      },
+
+      {
+        $sort: {
+          totalAmount: -1,
+        },
+      },
+    ]);
+
+    // --------------------------------------------------------
+    // Add property details
+    // --------------------------------------------------------
+
+    const propertyMap = new Map(
+      properties.map((property) => [property._id.toString(), property]),
+    );
+
+    const formattedPropertySpending = propertySpending.map((item) => ({
+      property: propertyMap.get(item._id.toString()) || null,
+
+      totalAmount: item.totalAmount,
+
+      expenseCount: item.expenseCount,
+    }));
+
+    // --------------------------------------------------------
+    // Maintenance financial tracking
+    // --------------------------------------------------------
+
+    const maintenanceStats = await MaintenanceRequest.aggregate([
+      {
+        $match: {
+          property: {
+            $in: propertyIds,
+          },
+        },
+      },
+
+      {
+        $group: {
+          _id: null,
+
+          totalRequests: {
+            $sum: 1,
+          },
+
+          estimatedCost: {
+            $sum: "$estimatedCost",
+          },
+
+          actualCost: {
+            $sum: "$actualCost",
+          },
+
+          openEstimatedCost: {
+            $sum: {
+              $cond: [
+                {
+                  $in: [
+                    "$status",
+                    ["OPEN", "ASSIGNED", "IN_PROGRESS", "ON_HOLD"],
+                  ],
+                },
+                "$estimatedCost",
+                0,
+              ],
+            },
+          },
+
+          completedActualCost: {
+            $sum: {
+              $cond: [
+                {
+                  $eq: ["$status", "COMPLETED"],
+                },
+                "$actualCost",
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    // --------------------------------------------------------
+    // Recent expenses
+    // --------------------------------------------------------
+
+    const recentExpenses = await Expense.find(expenseMatch)
+      .populate("property", "title propertyType")
+      .populate(
+        "maintenanceRequest",
+        "title category status estimatedCost actualCost",
+      )
+      .sort({
+        expenseDate: -1,
+      })
+      .limit(10)
+      .lean();
+
+    // --------------------------------------------------------
+    // Highest-value expenses
+    // --------------------------------------------------------
+
+    const topExpenses = await Expense.find(expenseMatch)
+      .populate("property", "title propertyType")
+      .populate(
+        "maintenanceRequest",
+        "title category status estimatedCost actualCost",
+      )
+      .sort({
+        amount: -1,
+      })
+      .limit(10)
+      .lean();
+
+    // --------------------------------------------------------
+    // Format summary
+    // --------------------------------------------------------
+
+    const summary = summaryStats[0] || {
+      totalExpenses: 0,
+      expenseCount: 0,
+      averageExpense: 0,
+      paidAmount: 0,
+      pendingAmount: 0,
+      partiallyPaidAmount: 0,
+      cancelledAmount: 0,
+    };
+
+    const maintenance = maintenanceStats[0] || {
+      totalRequests: 0,
+      estimatedCost: 0,
+      actualCost: 0,
+      openEstimatedCost: 0,
+      completedActualCost: 0,
+    };
+
+    // --------------------------------------------------------
+    // Response
+    // --------------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+
+      dashboard: {
+        summary: {
+          totalExpenses: Number(summary.totalExpenses || 0),
+
+          expenseCount: summary.expenseCount || 0,
+
+          averageExpense: Number((summary.averageExpense || 0).toFixed(2)),
+
+          paidAmount: Number(summary.paidAmount || 0),
+
+          pendingAmount: Number(summary.pendingAmount || 0),
+
+          partiallyPaidAmount: Number(summary.partiallyPaidAmount || 0),
+
+          cancelledAmount: Number(summary.cancelledAmount || 0),
+        },
+
+        expenseByCategory,
+
+        monthlyTrend,
+
+        paymentStatusBreakdown,
+
+        propertySpending: formattedPropertySpending,
+
+        maintenanceCosts: {
+          totalRequests: maintenance.totalRequests || 0,
+
+          estimatedCost: maintenance.estimatedCost || 0,
+
+          actualCost: maintenance.actualCost || 0,
+
+          openEstimatedCost: maintenance.openEstimatedCost || 0,
+
+          completedActualCost: maintenance.completedActualCost || 0,
+        },
+
+        recentExpenses,
+
+        topExpenses,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
 module.exports = {
   getOwnerDashboard,
   getPropertyIntelligence,
+  getFinancialDashboard,
 };

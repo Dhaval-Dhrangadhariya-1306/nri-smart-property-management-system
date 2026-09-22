@@ -3,6 +3,7 @@ const express = require("express");
 const {
   getOwnerDashboard,
   getPropertyIntelligence,
+  getFinancialDashboard,
 } = require("../controllers/dashboardController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -10,17 +11,36 @@ const authorize = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
-// Authentication required for all dashboard routes
+// ============================================================
+// AUTHENTICATION
+// ============================================================
+
 router.use(authMiddleware);
 
-// Owner dashboard
+// ============================================================
+// OWNER DASHBOARD
+// ============================================================
+
 router.get("/owner", authorize("NRI_OWNER", "ADMIN"), getOwnerDashboard);
 
-// Single property intelligence
+// ============================================================
+// PROPERTY INTELLIGENCE
+// ============================================================
+
 router.get(
   "/property/:propertyId",
   authorize("NRI_OWNER", "ADMIN"),
   getPropertyIntelligence,
+);
+
+// ============================================================
+// FINANCIAL DASHBOARD
+// ============================================================
+
+router.get(
+  "/financial",
+  authorize("NRI_OWNER", "ADMIN"),
+  getFinancialDashboard,
 );
 
 module.exports = router;
