@@ -56,7 +56,11 @@ app.use(
 // ============================================================
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.urlencoded({
+    extended: true,
+  }),
+);
 
 // ============================================================
 // HEALTH CHECK
@@ -73,26 +77,37 @@ app.get("/", (req, res) => {
 // API ROUTES
 // ============================================================
 
+// Authentication
 app.use("/api/auth", authRoutes);
 
+// Property Management
 app.use("/api/properties", propertyRoutes);
 
+// Monitoring & Security Events
 app.use("/api/monitoring", monitoringRoutes);
 
+// Caretaker Management
 app.use("/api/caretakers", caretakerRoutes);
 
+// Property Inspections
 app.use("/api/inspections", inspectionRoutes);
 
+// Maintenance Management
 app.use("/api/maintenance", maintenanceRoutes);
 
+// Expense Management
 app.use("/api/expenses", expenseRoutes);
 
+// Document Vault
 app.use("/api/documents", documentRoutes);
 
+// Notifications
 app.use("/api/notifications", notificationRoutes);
 
+// Vendor Management
 app.use("/api/vendors", vendorRoutes);
 
+// Analytics & Dashboards
 app.use("/api/dashboard", dashboardRoutes);
 
 // ============================================================

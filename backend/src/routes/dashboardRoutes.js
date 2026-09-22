@@ -4,6 +4,7 @@ const {
   getOwnerDashboard,
   getPropertyIntelligence,
   getFinancialDashboard,
+  getPropertyHealthDashboard,
 } = require("../controllers/dashboardController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -42,5 +43,19 @@ router.get(
   authorize("NRI_OWNER", "ADMIN"),
   getFinancialDashboard,
 );
+
+// ============================================================
+// PROPERTY HEALTH DASHBOARD
+// ============================================================
+
+router.get(
+  "/property-health",
+  authorize("NRI_OWNER", "ADMIN"),
+  getPropertyHealthDashboard,
+);
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = router;
