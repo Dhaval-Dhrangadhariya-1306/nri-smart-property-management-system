@@ -2,12 +2,20 @@ const mongoose = require("mongoose");
 
 const maintenanceRequestSchema = new mongoose.Schema(
   {
+    // ==========================================================
+    // PROPERTY
+    // ==========================================================
+
     property: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Property",
       required: [true, "Property is required"],
       index: true,
     },
+
+    // ==========================================================
+    // REPORTER
+    // ==========================================================
 
     reportedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -16,6 +24,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ==========================================================
+    // ASSIGNED CARETAKER
+    // ==========================================================
+
     assignedCaretaker: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -23,12 +35,41 @@ const maintenanceRequestSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ==========================================================
+    // ASSIGNED VENDOR
+    // ==========================================================
+
+    assignedVendor: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vendor",
+      default: null,
+      index: true,
+    },
+
+    vendorAssignedAt: {
+      type: Date,
+      default: null,
+    },
+
+    vendorCompletedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // ==========================================================
+    // INSPECTION
+    // ==========================================================
+
     inspection: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Inspection",
       default: null,
       index: true,
     },
+
+    // ==========================================================
+    // BASIC INFORMATION
+    // ==========================================================
 
     title: {
       type: String,
@@ -45,6 +86,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
       minlength: [5, "Description must be at least 5 characters"],
       maxlength: [2000, "Description cannot exceed 2000 characters"],
     },
+
+    // ==========================================================
+    // CATEGORY
+    // ==========================================================
 
     category: {
       type: String,
@@ -65,6 +110,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
       required: [true, "Maintenance category is required"],
     },
 
+    // ==========================================================
+    // PRIORITY
+    // ==========================================================
+
     priority: {
       type: String,
       enum: {
@@ -74,6 +123,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
       default: "MEDIUM",
       index: true,
     },
+
+    // ==========================================================
+    // STATUS
+    // ==========================================================
 
     status: {
       type: String,
@@ -92,6 +145,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ==========================================================
+    // COSTS
+    // ==========================================================
+
     estimatedCost: {
       type: Number,
       min: [0, "Estimated cost cannot be negative"],
@@ -103,6 +160,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
       min: [0, "Actual cost cannot be negative"],
       default: 0,
     },
+
+    // ==========================================================
+    // IMAGES
+    // ==========================================================
 
     images: {
       type: [String],
@@ -120,12 +181,20 @@ const maintenanceRequestSchema = new mongoose.Schema(
       },
     },
 
+    // ==========================================================
+    // NOTES
+    // ==========================================================
+
     notes: {
       type: String,
       trim: true,
       maxlength: [2000, "Notes cannot exceed 2000 characters"],
       default: "",
     },
+
+    // ==========================================================
+    // TIMESTAMPS
+    // ==========================================================
 
     reportedAt: {
       type: Date,
@@ -153,6 +222,10 @@ const maintenanceRequestSchema = new mongoose.Schema(
   },
 );
 
+// ============================================================
+// INDEXES
+// ============================================================
+
 // Property maintenance dashboard queries
 maintenanceRequestSchema.index({
   property: 1,
@@ -165,6 +238,19 @@ maintenanceRequestSchema.index({
   assignedCaretaker: 1,
   status: 1,
   priority: 1,
+});
+
+// Vendor workload queries
+maintenanceRequestSchema.index({
+  assignedVendor: 1,
+  status: 1,
+  priority: 1,
+});
+
+// Vendor history
+maintenanceRequestSchema.index({
+  assignedVendor: 1,
+  createdAt: -1,
 });
 
 // Owner maintenance history

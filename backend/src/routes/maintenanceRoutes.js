@@ -5,6 +5,7 @@ const {
   getOwnerMaintenanceRequests,
   getPropertyMaintenanceRequests,
   getCaretakerMaintenanceRequests,
+  assignVendorToMaintenance,
   updateMaintenanceStatus,
   getMaintenanceRequestById,
 } = require("../controllers/maintenanceController");
@@ -14,7 +15,10 @@ const authorize = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
-// All maintenance routes require authentication
+// ============================================================
+// AUTHENTICATION
+// ============================================================
+
 router.use(protect);
 
 // ============================================================
@@ -32,6 +36,13 @@ router.get(
   "/property/:propertyId",
   authorize("NRI_OWNER", "ADMIN"),
   getPropertyMaintenanceRequests,
+);
+
+// Assign / change vendor
+router.patch(
+  "/:requestId/vendor",
+  authorize("NRI_OWNER", "ADMIN"),
+  assignVendorToMaintenance,
 );
 
 // ============================================================
@@ -57,8 +68,9 @@ router.patch(
 // ============================================================
 
 // Get one maintenance request
-// Controller ensures the user is either the reporter
-// or the assigned caretaker.
+// Controller ensures the user is either:
+// - the reporter
+// - the assigned caretaker
 router.get(
   "/:requestId",
   authorize("NRI_OWNER", "ADMIN", "CARETAKER"),

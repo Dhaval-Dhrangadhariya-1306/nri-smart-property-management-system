@@ -17,6 +17,7 @@ const expenseRoutes = require("./routes/expenseRoutes");
 const documentRoutes = require("./routes/documentRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
+const vendorRoutes = require("./routes/vendorRoutes");
 
 // ============================================================
 // MIDDLEWARE
@@ -89,6 +90,8 @@ app.use("/api/expenses", expenseRoutes);
 app.use("/api/documents", documentRoutes);
 
 app.use("/api/notifications", notificationRoutes);
+
+app.use("/api/vendors", vendorRoutes);
 
 app.use("/api/dashboard", dashboardRoutes);
 
