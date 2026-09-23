@@ -28,7 +28,7 @@ router.use(protect);
 // Create maintenance request
 router.post("/", authorize("NRI_OWNER", "ADMIN"), createMaintenanceRequest);
 
-// Get maintenance requests reported by logged-in owner
+// Get owner's maintenance requests
 router.get("/my", authorize("NRI_OWNER", "ADMIN"), getOwnerMaintenanceRequests);
 
 // Get maintenance requests for a property
@@ -49,14 +49,14 @@ router.patch(
 // CARETAKER ROUTES
 // ============================================================
 
-// Get maintenance requests assigned to logged-in caretaker
+// Get maintenance requests assigned to caretaker
 router.get(
   "/caretaker/my",
   authorize("CARETAKER"),
   getCaretakerMaintenanceRequests,
 );
 
-// Update maintenance request status
+// Update maintenance status
 router.patch(
   "/:requestId/status",
   authorize("CARETAKER"),
@@ -64,13 +64,10 @@ router.patch(
 );
 
 // ============================================================
-// SHARED REQUEST ACCESS
+// SHARED DETAIL ROUTE
 // ============================================================
 
-// Get one maintenance request
-// Controller ensures the user is either:
-// - the reporter
-// - the assigned caretaker
+// Get single maintenance request
 router.get(
   "/:requestId",
   authorize("NRI_OWNER", "ADMIN", "CARETAKER"),

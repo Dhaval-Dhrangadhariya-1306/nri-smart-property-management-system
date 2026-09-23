@@ -4,6 +4,7 @@ const Expense = require("../models/Expense");
 const Property = require("../models/Property");
 const MaintenanceRequest = require("../models/MaintenanceRequest");
 const Inspection = require("../models/Inspection");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -17,6 +18,33 @@ const createError = (message, statusCode = 400) => {
 
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
+};
+
+// ============================================================
+// AUDIT SNAPSHOT HELPER
+// ============================================================
+
+const getExpenseAuditValues = (expense) => {
+  return {
+    property: expense.property || null,
+    owner: expense.owner || null,
+    maintenanceRequest: expense.maintenanceRequest || null,
+    inspection: expense.inspection || null,
+
+    title: expense.title,
+    description: expense.description,
+    category: expense.category,
+    amount: expense.amount,
+    expenseDate: expense.expenseDate,
+
+    paymentStatus: expense.paymentStatus,
+    paidBy: expense.paidBy,
+    paymentMethod: expense.paymentMethod,
+
+    receiptUrl: expense.receiptUrl,
+    notes: expense.notes,
+    isActive: expense.isActive,
+  };
 };
 
 // ============================================================
@@ -225,6 +253,20 @@ const createExpense = async (req, res, next) => {
     });
 
     // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "EXPENSE_CREATED",
+      resourceType: "EXPENSE",
+      resourceId: expense._id,
+      property: expense.property,
+      description: `Expense "${expense.title}" was created for property "${property.title}".`,
+      newValues: getExpenseAuditValues(expense),
+    });
+
+    // --------------------------------------------------------
     // POPULATE RESPONSE
     // --------------------------------------------------------
 
@@ -398,6 +440,16 @@ const updateExpense = async (req, res, next) => {
       );
     }
 
+    // --------------------------------------------------------
+    // CAPTURE OLD VALUES BEFORE UPDATE
+    // --------------------------------------------------------
+
+    const oldValues = getExpenseAuditValues(expense);
+
+    // --------------------------------------------------------
+    // ALLOWED FIELDS
+    // --------------------------------------------------------
+
     const allowedFields = [
       "title",
       "description",
@@ -489,7 +541,30 @@ const updateExpense = async (req, res, next) => {
       expense.receiptUrl = expense.receiptUrl.trim();
     }
 
+    // --------------------------------------------------------
+    // SAVE
+    // --------------------------------------------------------
+
     await expense.save();
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "EXPENSE_UPDATED",
+      resourceType: "EXPENSE",
+      resourceId: expense._id,
+      property: expense.property,
+      description: `Expense "${expense.title}" was updated.`,
+      oldValues,
+      newValues: getExpenseAuditValues(expense),
+    });
+
+    // --------------------------------------------------------
+    // POPULATE RESPONSE
+    // --------------------------------------------------------
 
     const updatedExpense = await Expense.findById(expense._id)
       .populate("property", "title propertyType address")
@@ -534,9 +609,34 @@ const deleteExpense = async (req, res, next) => {
       );
     }
 
+    // --------------------------------------------------------
+    // CAPTURE OLD VALUES
+    // --------------------------------------------------------
+
+    const oldValues = getExpenseAuditValues(expense);
+
+    // --------------------------------------------------------
+    // SOFT DELETE
+    // --------------------------------------------------------
+
     expense.isActive = false;
 
     await expense.save();
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "EXPENSE_DELETED",
+      resourceType: "EXPENSE",
+      resourceId: expense._id,
+      property: expense.property,
+      description: `Expense "${expense.title}" was soft-deleted.`,
+      oldValues,
+      newValues: getExpenseAuditValues(expense),
+    });
 
     res.status(200).json({
       success: true,

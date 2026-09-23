@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 
 const Vendor = require("../models/Vendor");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -14,6 +15,50 @@ const createError = (message, statusCode = 400) => {
 
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
+};
+
+// ============================================================
+// VENDOR AUDIT SNAPSHOT
+// ============================================================
+
+const getVendorAuditValues = (vendor) => {
+  if (!vendor) return null;
+
+  return {
+    owner: vendor.owner?._id
+      ? vendor.owner._id.toString()
+      : vendor.owner?.toString?.() || null,
+
+    name: vendor.name,
+    companyName: vendor.companyName,
+    category: vendor.category,
+
+    phone: vendor.phone,
+    email: vendor.email,
+
+    address: vendor.address
+      ? {
+          addressLine1: vendor.address.addressLine1 || "",
+          addressLine2: vendor.address.addressLine2 || "",
+          city: vendor.address.city || "",
+          state: vendor.address.state || "",
+          country: vendor.address.country || "",
+          postalCode: vendor.address.postalCode || "",
+        }
+      : null,
+
+    services: Array.isArray(vendor.services) ? [...vendor.services] : [],
+
+    status: vendor.status,
+    rating: vendor.rating,
+
+    totalJobs: vendor.totalJobs,
+    completedJobs: vendor.completedJobs,
+
+    notes: vendor.notes,
+
+    isActive: vendor.isActive,
+  };
 };
 
 // ============================================================
@@ -55,6 +100,20 @@ const createVendor = async (req, res, next) => {
       notes: notes?.trim() || "",
       status: status || "ACTIVE",
       rating: rating ?? 0,
+    });
+
+    // --------------------------------------------------------
+    // AUDIT: VENDOR_CREATED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "VENDOR_CREATED",
+      resourceType: "VENDOR",
+      resourceId: vendor._id,
+      description: `Vendor "${vendor.name}" was created.`,
+      oldValues: null,
+      newValues: getVendorAuditValues(vendor),
     });
 
     const populatedVendor = await Vendor.findById(vendor._id).populate(
@@ -243,27 +302,55 @@ const updateVendor = async (req, res, next) => {
       }
     }
 
-    const vendor = await Vendor.findOneAndUpdate(
-      {
-        _id: vendorId,
-        owner: req.user.userId,
-        isActive: true,
-      },
-      updates,
-      {
-        new: true,
-        runValidators: true,
-      },
-    ).populate("owner", "name email role");
+    // --------------------------------------------------------
+    // GET EXISTING VENDOR
+    // --------------------------------------------------------
 
-    if (!vendor) {
+    const existingVendor = await Vendor.findOne({
+      _id: vendorId,
+      owner: req.user.userId,
+      isActive: true,
+    });
+
+    if (!existingVendor) {
       throw createError("Vendor not found or access denied", 404);
     }
+
+    const oldValues = getVendorAuditValues(existingVendor);
+
+    // --------------------------------------------------------
+    // APPLY UPDATE
+    // --------------------------------------------------------
+
+    Object.assign(existingVendor, updates);
+
+    await existingVendor.save();
+
+    const newValues = getVendorAuditValues(existingVendor);
+
+    // --------------------------------------------------------
+    // AUDIT: VENDOR_UPDATED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "VENDOR_UPDATED",
+      resourceType: "VENDOR",
+      resourceId: existingVendor._id,
+      description: `Vendor "${existingVendor.name}" was updated.`,
+      oldValues,
+      newValues,
+    });
+
+    const populatedVendor = await Vendor.findById(existingVendor._id).populate(
+      "owner",
+      "name email role",
+    );
 
     return res.status(200).json({
       success: true,
       message: "Vendor updated successfully",
-      vendor,
+      vendor: populatedVendor,
     });
   } catch (error) {
     next(error);
@@ -282,25 +369,46 @@ const deleteVendor = async (req, res, next) => {
       throw createError("Invalid vendor ID", 400);
     }
 
-    const vendor = await Vendor.findOneAndUpdate(
-      {
-        _id: vendorId,
-        owner: req.user.userId,
-        isActive: true,
-      },
-      {
-        isActive: false,
-        status: "INACTIVE",
-      },
-      {
-        new: true,
-        runValidators: true,
-      },
-    );
+    // --------------------------------------------------------
+    // GET EXISTING VENDOR
+    // --------------------------------------------------------
+
+    const vendor = await Vendor.findOne({
+      _id: vendorId,
+      owner: req.user.userId,
+      isActive: true,
+    });
 
     if (!vendor) {
       throw createError("Vendor not found or access denied", 404);
     }
+
+    const oldValues = getVendorAuditValues(vendor);
+
+    // --------------------------------------------------------
+    // SOFT DELETE / ARCHIVE
+    // --------------------------------------------------------
+
+    vendor.isActive = false;
+    vendor.status = "INACTIVE";
+
+    await vendor.save();
+
+    const newValues = getVendorAuditValues(vendor);
+
+    // --------------------------------------------------------
+    // AUDIT: VENDOR_ARCHIVED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "VENDOR_ARCHIVED",
+      resourceType: "VENDOR",
+      resourceId: vendor._id,
+      description: `Vendor "${vendor.name}" was archived.`,
+      oldValues,
+      newValues,
+    });
 
     return res.status(200).json({
       success: true,

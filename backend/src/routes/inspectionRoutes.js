@@ -19,7 +19,7 @@ const router = express.Router();
 router.use(protect);
 
 // ============================================================
-// CARETAKER INSPECTION ROUTES
+// CARETAKER ROUTES
 // ============================================================
 
 // Create inspection
@@ -28,14 +28,14 @@ router.post("/", authorize("CARETAKER"), createInspection);
 // Get inspections created by logged-in caretaker
 router.get("/my", authorize("CARETAKER"), getMyInspections);
 
-// Get inspection history for assigned property
+// Get inspections for a property
 router.get(
   "/property/:propertyId",
   authorize("CARETAKER"),
   getPropertyInspections,
 );
 
-// Get one inspection created by logged-in caretaker
+// Get single inspection
 router.get("/:inspectionId", authorize("CARETAKER"), getInspectionById);
 
 module.exports = router;

@@ -16,7 +16,7 @@ const authorize = require("../middleware/roleMiddleware");
 const router = express.Router();
 
 // ============================================================
-// ALL EXPENSE ROUTES REQUIRE AUTHENTICATION
+// AUTHENTICATION
 // ============================================================
 
 router.use(protect);

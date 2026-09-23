@@ -39,18 +39,14 @@ const app = express();
 
 const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
 
+app.use(helmet());
+
 app.use(
   cors({
     origin: corsOrigin,
     credentials: true,
   }),
 );
-
-// ============================================================
-// SECURITY
-// ============================================================
-
-app.use(helmet());
 
 // ============================================================
 // BODY PARSERS
@@ -65,7 +61,7 @@ app.use(
 );
 
 // ============================================================
-// ROOT / HEALTH CHECK
+// HEALTH CHECK
 // ============================================================
 
 app.get("/", (req, res) => {
@@ -99,6 +95,7 @@ app.use("/api/notifications", notificationRoutes);
 
 app.use("/api/vendors", vendorRoutes);
 
+// Audit logs
 app.use("/api/audit-logs", auditLogRoutes);
 
 app.use("/api/dashboard", dashboardRoutes);
