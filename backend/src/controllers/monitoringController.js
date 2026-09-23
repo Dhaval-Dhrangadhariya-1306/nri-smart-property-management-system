@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const MonitoringEvent = require("../models/MonitoringEvent");
 const Property = require("../models/Property");
+const createAuditLog = require("../utils/auditLogger");
+
+// ============================================================
+// HELPERS
+// ============================================================
 
 const createError = (message, statusCode = 400) => {
   const error = new Error(message);
@@ -142,6 +147,31 @@ const createMonitoringEvent = async (req, res, next) => {
       metadata: metadata || {},
 
       occurredAt: eventDate,
+    });
+
+    // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MONITORING_EVENT_CREATED",
+      resourceType: "MONITORING_EVENT",
+      resourceId: monitoringEvent._id,
+      property: property._id,
+      description: `Monitoring event "${monitoringEvent.title}" was created`,
+      newValues: {
+        eventType: monitoringEvent.eventType,
+        severity: monitoringEvent.severity,
+        title: monitoringEvent.title,
+        description: monitoringEvent.description,
+        source: monitoringEvent.source,
+        location: monitoringEvent.location,
+        metadata: monitoringEvent.metadata,
+        occurredAt: monitoringEvent.occurredAt,
+        isAcknowledged: monitoringEvent.isAcknowledged,
+        isResolved: monitoringEvent.isResolved,
+      },
     });
 
     await monitoringEvent.populate([
@@ -312,11 +342,44 @@ const acknowledgeEvent = async (req, res, next) => {
       );
     }
 
+    // ----------------------------------------------------------
+    // Capture old state for audit
+    // ----------------------------------------------------------
+
+    const oldValues = {
+      isAcknowledged: event.isAcknowledged,
+      acknowledgedBy: event.acknowledgedBy,
+      acknowledgedAt: event.acknowledgedAt,
+    };
+
+    // ----------------------------------------------------------
+    // Update acknowledgment state
+    // ----------------------------------------------------------
+
     event.isAcknowledged = true;
     event.acknowledgedBy = req.user.userId;
     event.acknowledgedAt = new Date();
 
     await event.save();
+
+    // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MONITORING_EVENT_ACKNOWLEDGED",
+      resourceType: "MONITORING_EVENT",
+      resourceId: event._id,
+      property: event.property,
+      description: `Monitoring event "${event.title}" was acknowledged`,
+      oldValues,
+      newValues: {
+        isAcknowledged: event.isAcknowledged,
+        acknowledgedBy: event.acknowledgedBy,
+        acknowledgedAt: event.acknowledgedAt,
+      },
+    });
 
     await event.populate([
       {
@@ -394,11 +457,44 @@ const resolveEvent = async (req, res, next) => {
       return next(createError("Monitoring event is already resolved"));
     }
 
+    // ----------------------------------------------------------
+    // Capture old state for audit
+    // ----------------------------------------------------------
+
+    const oldValues = {
+      isResolved: event.isResolved,
+      resolvedBy: event.resolvedBy,
+      resolvedAt: event.resolvedAt,
+    };
+
+    // ----------------------------------------------------------
+    // Update resolution state
+    // ----------------------------------------------------------
+
     event.isResolved = true;
     event.resolvedBy = req.user.userId;
     event.resolvedAt = new Date();
 
     await event.save();
+
+    // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MONITORING_EVENT_RESOLVED",
+      resourceType: "MONITORING_EVENT",
+      resourceId: event._id,
+      property: event.property,
+      description: `Monitoring event "${event.title}" was resolved`,
+      oldValues,
+      newValues: {
+        isResolved: event.isResolved,
+        resolvedBy: event.resolvedBy,
+        resolvedAt: event.resolvedAt,
+      },
+    });
 
     await event.populate([
       {
