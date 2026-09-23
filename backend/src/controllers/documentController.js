@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
+
 const Document = require("../models/Document");
 const Property = require("../models/Property");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -14,6 +16,34 @@ const createError = (message, statusCode = 400) => {
 
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
+};
+
+// ============================================================
+// DOCUMENT AUDIT SNAPSHOT
+// ============================================================
+
+const getDocumentAuditValues = (document) => {
+  return {
+    property: document.property,
+    owner: document.owner,
+
+    title: document.title,
+    category: document.category,
+    description: document.description,
+
+    originalFileName: document.originalFileName,
+    fileType: document.fileType,
+    fileSize: document.fileSize,
+
+    documentNumber: document.documentNumber,
+    issuedBy: document.issuedBy,
+    issueDate: document.issueDate,
+    expiryDate: document.expiryDate,
+
+    status: document.status,
+    isSensitive: document.isSensitive,
+    isActive: document.isActive,
+  };
 };
 
 // ============================================================
@@ -159,6 +189,25 @@ const createDocument = async (req, res, next) => {
       isActive: true,
     });
 
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "DOCUMENT_CREATED",
+      resourceType: "DOCUMENT",
+      resourceId: document._id,
+      property: property._id,
+      description: `Document "${document.title}" was created for property "${property.title}".`,
+      oldValues: null,
+      newValues: getDocumentAuditValues(document),
+    });
+
+    // --------------------------------------------------------
+    // Populate response
+    // --------------------------------------------------------
+
     const populatedDocument = await Document.findById(document._id)
       .populate("property", "title propertyType address")
       .populate("owner", "name email");
@@ -296,6 +345,12 @@ const updateDocument = async (req, res, next) => {
       throw createError("Document not found", 404);
     }
 
+    // --------------------------------------------------------
+    // Capture old values BEFORE modification
+    // --------------------------------------------------------
+
+    const oldValues = getDocumentAuditValues(document);
+
     const allowedFields = [
       "title",
       "category",
@@ -361,7 +416,36 @@ const updateDocument = async (req, res, next) => {
       throw createError("Issue date cannot be later than expiry date", 400);
     }
 
+    // --------------------------------------------------------
+    // Save
+    // --------------------------------------------------------
+
     await document.save();
+
+    // --------------------------------------------------------
+    // Capture new values AFTER modification
+    // --------------------------------------------------------
+
+    const newValues = getDocumentAuditValues(document);
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "DOCUMENT_UPDATED",
+      resourceType: "DOCUMENT",
+      resourceId: document._id,
+      property: document.property,
+      description: `Document "${document.title}" was updated.`,
+      oldValues,
+      newValues,
+    });
+
+    // --------------------------------------------------------
+    // Populate response
+    // --------------------------------------------------------
 
     const updatedDocument = await Document.findById(document._id)
       .populate("property", "title propertyType address")
@@ -399,10 +483,37 @@ const deleteDocument = async (req, res, next) => {
       throw createError("Document not found", 404);
     }
 
+    // --------------------------------------------------------
+    // Capture old values BEFORE archive
+    // --------------------------------------------------------
+
+    const oldValues = getDocumentAuditValues(document);
+
     document.isActive = false;
     document.status = "ARCHIVED";
 
     await document.save();
+
+    // --------------------------------------------------------
+    // Capture new values AFTER archive
+    // --------------------------------------------------------
+
+    const newValues = getDocumentAuditValues(document);
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "DOCUMENT_ARCHIVED",
+      resourceType: "DOCUMENT",
+      resourceId: document._id,
+      property: document.property,
+      description: `Document "${document.title}" was archived.`,
+      oldValues,
+      newValues,
+    });
 
     return res.status(200).json({
       success: true,
