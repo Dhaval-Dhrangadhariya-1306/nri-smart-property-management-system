@@ -73,6 +73,30 @@ const createNotification = async (req, res, next) => {
       if (!propertyDocument) {
         throw createError("Property not found or inactive", 404);
       }
+
+      // ------------------------------------------------------
+      // OWNER AUTHORIZATION
+      // ------------------------------------------------------
+
+      if (req.user.role === "NRI_OWNER") {
+        if (propertyDocument.owner.toString() !== req.user.userId.toString()) {
+          throw createError(
+            "You do not have permission to create a notification for this property",
+            403,
+          );
+        }
+      }
+    }
+
+    // --------------------------------------------------------
+    // OWNER MUST SPECIFY A PROPERTY
+    // --------------------------------------------------------
+
+    if (req.user.role === "NRI_OWNER" && !propertyDocument) {
+      throw createError(
+        "NRI owners must specify a property when creating a notification",
+        403,
+      );
     }
 
     // --------------------------------------------------------
@@ -131,6 +155,10 @@ const createNotification = async (req, res, next) => {
       expiresAt: parsedExpiresAt,
       metadata: metadata || {},
     });
+
+    // --------------------------------------------------------
+    // Populate response
+    // --------------------------------------------------------
 
     const populatedNotification = await Notification.findById(notification._id)
       .populate("recipient", "name email role")
