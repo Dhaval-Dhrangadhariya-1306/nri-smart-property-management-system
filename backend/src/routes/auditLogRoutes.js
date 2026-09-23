@@ -3,6 +3,7 @@ const express = require("express");
 const {
   getMyAuditLogs,
   getPropertyAuditLogs,
+  getPropertyActivityTimeline,
   getAuditLogById,
 } = require("../controllers/auditLogController");
 
@@ -31,6 +32,16 @@ router.get(
   "/property/:propertyId",
   authorize("NRI_OWNER", "ADMIN"),
   getPropertyAuditLogs,
+);
+
+// ============================================================
+// PROPERTY ACTIVITY TIMELINE
+// ============================================================
+
+router.get(
+  "/timeline/property/:propertyId",
+  authorize("NRI_OWNER", "ADMIN"),
+  getPropertyActivityTimeline,
 );
 
 // ============================================================

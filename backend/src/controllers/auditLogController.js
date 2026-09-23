@@ -92,6 +92,80 @@ const getPropertyAuditLogs = async (req, res, next) => {
 };
 
 // ============================================================
+// GET PROPERTY ACTIVITY TIMELINE
+// ============================================================
+
+const getPropertyActivityTimeline = async (req, res, next) => {
+  try {
+    const ownerId = req.user.userId;
+    const { propertyId } = req.params;
+
+    // --------------------------------------------------------
+    // Validate ObjectId
+    // --------------------------------------------------------
+
+    if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+      const error = new Error("Invalid property ID");
+      error.statusCode = 400;
+      return next(error);
+    }
+
+    // --------------------------------------------------------
+    // Verify property ownership
+    // --------------------------------------------------------
+
+    const property = await Property.findOne({
+      _id: propertyId,
+      owner: ownerId,
+    })
+      .select("_id title propertyType address")
+      .lean();
+
+    if (!property) {
+      const error = new Error("Property not found");
+      error.statusCode = 404;
+      return next(error);
+    }
+
+    // --------------------------------------------------------
+    // Retrieve activity records
+    // --------------------------------------------------------
+
+    const logs = await AuditLog.find({
+      property: propertyId,
+    })
+      .populate("actor", "name email role isActive")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+
+    // --------------------------------------------------------
+    // Convert audit records into timeline records
+    // --------------------------------------------------------
+
+    const timeline = logs.map((log) => ({
+      id: log._id,
+      action: log.action,
+      resourceType: log.resourceType,
+      resourceId: log.resourceId,
+      description: log.description,
+      actor: log.actor,
+      createdAt: log.createdAt,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: "Property activity timeline retrieved successfully",
+      property,
+      count: timeline.length,
+      data: timeline,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
 // GET SINGLE AUDIT LOG
 // ============================================================
 
@@ -169,5 +243,6 @@ const getAuditLogById = async (req, res, next) => {
 module.exports = {
   getMyAuditLogs,
   getPropertyAuditLogs,
+  getPropertyActivityTimeline,
   getAuditLogById,
 };
