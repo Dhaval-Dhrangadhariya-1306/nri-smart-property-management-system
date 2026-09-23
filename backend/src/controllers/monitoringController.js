@@ -25,11 +25,14 @@ const createMonitoringEvent = async (req, res, next) => {
       severity,
       title,
       description,
-      source,
       location,
       metadata,
       occurredAt,
     } = req.body;
+
+    // ----------------------------------------------------------
+    // Validate required fields
+    // ----------------------------------------------------------
 
     if (!propertyId || !eventType || !title) {
       return next(
@@ -60,15 +63,26 @@ const createMonitoringEvent = async (req, res, next) => {
     }
 
     // ----------------------------------------------------------
-    // Verify property ownership
+    // Verify property access
+    //
+    // NRI_OWNER:
+    //   Can only access their own active property.
+    //
+    // ADMIN:
+    //   Can access any active property.
     // ----------------------------------------------------------
 
-    const property = await Property.findOne({
+    const propertyQuery = {
       _id: propertyId,
-      owner: req.user.userId,
       isActive: true,
       status: "ACTIVE",
-    });
+    };
+
+    if (req.user.role === "NRI_OWNER") {
+      propertyQuery.owner = req.user.userId;
+    }
+
+    const property = await Property.findOne(propertyQuery);
 
     if (!property) {
       return next(
@@ -97,12 +111,24 @@ const createMonitoringEvent = async (req, res, next) => {
     }
 
     // ----------------------------------------------------------
+    // Determine trusted event source
+    //
+    // Do not allow the client to claim SYSTEM, MAINTENANCE,
+    // INSPECTION, etc. through req.body.source.
+    //
+    // Manual events created through this endpoint are attributed
+    // to the authenticated actor.
+    // ----------------------------------------------------------
+
+    const eventSource = req.user.role === "ADMIN" ? "SYSTEM" : "OWNER";
+
+    // ----------------------------------------------------------
     // Create event
     // ----------------------------------------------------------
 
     const monitoringEvent = await MonitoringEvent.create({
       property: property._id,
-      owner: req.user.userId,
+      owner: property.owner,
 
       eventType,
       severity: severity || "INFO",
@@ -110,7 +136,7 @@ const createMonitoringEvent = async (req, res, next) => {
       title: title.trim(),
       description: description ? description.trim() : "",
 
-      source: source || "OWNER",
+      source: eventSource,
 
       location,
       metadata: metadata || {},
@@ -154,11 +180,20 @@ const getPropertyEvents = async (req, res, next) => {
       return next(createError("Invalid property ID"));
     }
 
-    const property = await Property.findOne({
+    // ----------------------------------------------------------
+    // Verify property access
+    // ----------------------------------------------------------
+
+    const propertyQuery = {
       _id: propertyId,
-      owner: req.user.userId,
       isActive: true,
-    });
+    };
+
+    if (req.user.role === "NRI_OWNER") {
+      propertyQuery.owner = req.user.userId;
+    }
+
+    const property = await Property.findOne(propertyQuery);
 
     if (!property) {
       return next(
@@ -166,10 +201,17 @@ const getPropertyEvents = async (req, res, next) => {
       );
     }
 
-    const events = await MonitoringEvent.find({
+    const eventQuery = {
       property: propertyId,
-      owner: req.user.userId,
-    })
+    };
+
+    // Owners only see their own property's events.
+    // Admins can see events across properties.
+    if (req.user.role === "NRI_OWNER") {
+      eventQuery.owner = req.user.userId;
+    }
+
+    const events = await MonitoringEvent.find(eventQuery)
       .populate(
         "property",
         "title propertyType address status occupancy condition health securityLevel",
@@ -236,10 +278,25 @@ const acknowledgeEvent = async (req, res, next) => {
       return next(createError("Invalid event ID"));
     }
 
-    const event = await MonitoringEvent.findOne({
+    // ----------------------------------------------------------
+    // Find event
+    //
+    // NRI_OWNER:
+    //   Only their own events.
+    //
+    // ADMIN:
+    //   Any event.
+    // ----------------------------------------------------------
+
+    const eventQuery = {
       _id: eventId,
-      owner: req.user.userId,
-    });
+    };
+
+    if (req.user.role === "NRI_OWNER") {
+      eventQuery.owner = req.user.userId;
+    }
+
+    const event = await MonitoringEvent.findOne(eventQuery);
 
     if (!event) {
       return next(createError("Monitoring event not found", 404));
@@ -301,10 +358,25 @@ const resolveEvent = async (req, res, next) => {
       return next(createError("Invalid event ID"));
     }
 
-    const event = await MonitoringEvent.findOne({
+    // ----------------------------------------------------------
+    // Find event
+    //
+    // NRI_OWNER:
+    //   Only their own events.
+    //
+    // ADMIN:
+    //   Any event.
+    // ----------------------------------------------------------
+
+    const eventQuery = {
       _id: eventId,
-      owner: req.user.userId,
-    });
+    };
+
+    if (req.user.role === "NRI_OWNER") {
+      eventQuery.owner = req.user.userId;
+    }
+
+    const event = await MonitoringEvent.findOne(eventQuery);
 
     if (!event) {
       return next(createError("Monitoring event not found", 404));
@@ -359,6 +431,10 @@ const resolveEvent = async (req, res, next) => {
     next(error);
   }
 };
+
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
   createMonitoringEvent,
