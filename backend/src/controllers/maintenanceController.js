@@ -5,6 +5,7 @@ const Inspection = require("../models/Inspection");
 const CaretakerAssignment = require("../models/CaretakerAssignment");
 const MaintenanceRequest = require("../models/MaintenanceRequest");
 const Vendor = require("../models/Vendor");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -323,6 +324,48 @@ const createMaintenanceRequest = async (req, res, next) => {
       );
     }
 
+    // --------------------------------------------------------
+    // AUDIT: MAINTENANCE CREATED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MAINTENANCE_CREATED",
+      resourceType: "MAINTENANCE_REQUEST",
+      resourceId: maintenanceRequest._id,
+      property: property._id,
+
+      description: `Maintenance request "${maintenanceRequest.title}" created for property "${property.title}"`,
+
+      oldValues: null,
+
+      newValues: {
+        title: maintenanceRequest.title,
+        description: maintenanceRequest.description,
+        category: maintenanceRequest.category,
+        priority: maintenanceRequest.priority,
+        status: maintenanceRequest.status,
+
+        assignedCaretaker: maintenanceRequest.assignedCaretaker,
+
+        assignedVendor: maintenanceRequest.assignedVendor,
+
+        inspection: maintenanceRequest.inspection,
+
+        estimatedCost: maintenanceRequest.estimatedCost,
+
+        actualCost: maintenanceRequest.actualCost,
+
+        images: maintenanceRequest.images,
+
+        notes: maintenanceRequest.notes,
+
+        assignedAt: maintenanceRequest.assignedAt,
+
+        vendorAssignedAt: maintenanceRequest.vendorAssignedAt,
+      },
+    });
+
     await populateMaintenanceRequest(maintenanceRequest);
 
     return res.status(201).json({
@@ -540,6 +583,16 @@ const assignVendorToMaintenance = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
+    // Capture old vendor state for audit
+    // --------------------------------------------------------
+
+    const oldVendorId = request.assignedVendor
+      ? request.assignedVendor.toString()
+      : null;
+
+    const oldVendorAssignedAt = request.vendorAssignedAt;
+
+    // --------------------------------------------------------
     // Assign vendor
     // --------------------------------------------------------
 
@@ -561,6 +614,33 @@ const assignVendorToMaintenance = async (req, res, next) => {
         },
       },
     );
+
+    // --------------------------------------------------------
+    // AUDIT: VENDOR ASSIGNED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MAINTENANCE_VENDOR_ASSIGNED",
+      resourceType: "MAINTENANCE_REQUEST",
+      resourceId: request._id,
+      property: request.property,
+
+      description: `Vendor assigned to maintenance request "${request.title}"`,
+
+      oldValues: {
+        assignedVendor: oldVendorId,
+        vendorAssignedAt: oldVendorAssignedAt,
+      },
+
+      newValues: {
+        assignedVendor: vendor._id,
+        vendorAssignedAt: request.vendorAssignedAt,
+        vendorName: vendor.name,
+        vendorCompanyName: vendor.companyName,
+        vendorCategory: vendor.category,
+      },
+    });
 
     await populateMaintenanceRequest(request);
 
@@ -650,6 +730,19 @@ const updateMaintenanceStatus = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
+    // Capture old state for audit
+    // --------------------------------------------------------
+
+    const oldMaintenanceState = {
+      status: request.status,
+      actualCost: request.actualCost,
+      notes: request.notes,
+      startedAt: request.startedAt,
+      completedAt: request.completedAt,
+      vendorCompletedAt: request.vendorCompletedAt,
+    };
+
+    // --------------------------------------------------------
     // Actual cost
     // --------------------------------------------------------
 
@@ -721,6 +814,61 @@ const updateMaintenanceStatus = async (req, res, next) => {
           },
         },
       );
+    }
+
+    // --------------------------------------------------------
+    // AUDIT: STATUS UPDATED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MAINTENANCE_STATUS_UPDATED",
+      resourceType: "MAINTENANCE_REQUEST",
+      resourceId: request._id,
+      property: request.property,
+
+      description: `Maintenance request "${request.title}" status changed from ${oldMaintenanceState.status} to ${request.status}`,
+
+      oldValues: oldMaintenanceState,
+
+      newValues: {
+        status: request.status,
+        actualCost: request.actualCost,
+        notes: request.notes,
+        startedAt: request.startedAt,
+        completedAt: request.completedAt,
+        vendorCompletedAt: request.vendorCompletedAt,
+      },
+    });
+
+    // --------------------------------------------------------
+    // AUDIT: MAINTENANCE COMPLETED
+    // --------------------------------------------------------
+
+    if (status === "COMPLETED") {
+      await createAuditLog({
+        req,
+        action: "MAINTENANCE_COMPLETED",
+        resourceType: "MAINTENANCE_REQUEST",
+        resourceId: request._id,
+        property: request.property,
+
+        description: `Maintenance request "${request.title}" was completed`,
+
+        oldValues: {
+          status: oldMaintenanceState.status,
+          actualCost: oldMaintenanceState.actualCost,
+          completedAt: oldMaintenanceState.completedAt,
+          vendorCompletedAt: oldMaintenanceState.vendorCompletedAt,
+        },
+
+        newValues: {
+          status: request.status,
+          actualCost: request.actualCost,
+          completedAt: request.completedAt,
+          vendorCompletedAt: request.vendorCompletedAt,
+        },
+      });
     }
 
     await populateMaintenanceRequest(request);

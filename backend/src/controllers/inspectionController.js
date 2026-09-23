@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const Inspection = require("../models/Inspection");
 const CaretakerAssignment = require("../models/CaretakerAssignment");
 const Property = require("../models/Property");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -132,7 +133,7 @@ const createInspection = async (req, res, next) => {
     } = req.body;
 
     // --------------------------------------------------------
-    // Validate property ID
+    // VALIDATION
     // --------------------------------------------------------
 
     if (!propertyId) {
@@ -143,10 +144,6 @@ const createInspection = async (req, res, next) => {
       return next(createError("Invalid property ID", 400));
     }
 
-    // --------------------------------------------------------
-    // Required fields
-    // --------------------------------------------------------
-
     if (!overallCondition) {
       return next(createError("Overall condition is required", 400));
     }
@@ -154,10 +151,6 @@ const createInspection = async (req, res, next) => {
     if (!securityStatus) {
       return next(createError("Security status is required", 400));
     }
-
-    // --------------------------------------------------------
-    // Validate arrays
-    // --------------------------------------------------------
 
     let cleanIssues = [];
     let cleanImages = [];
@@ -169,10 +162,6 @@ const createInspection = async (req, res, next) => {
     } catch (error) {
       return next(error);
     }
-
-    // --------------------------------------------------------
-    // Validate notes
-    // --------------------------------------------------------
 
     let cleanNotes = "";
 
@@ -191,7 +180,7 @@ const createInspection = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
-    // Validate inspection date
+    // INSPECTION DATE
     // --------------------------------------------------------
 
     let inspectionDate = new Date();
@@ -211,7 +200,7 @@ const createInspection = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
-    // Verify property
+    // FIND ACTIVE PROPERTY
     // --------------------------------------------------------
 
     const property = await Property.findOne({
@@ -227,7 +216,7 @@ const createInspection = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
-    // Verify active caretaker assignment
+    // VERIFY ACTIVE CARETAKER ASSIGNMENT
     // --------------------------------------------------------
 
     const assignment = await CaretakerAssignment.findOne({
@@ -243,7 +232,7 @@ const createInspection = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
-    // Calculate health
+    // CALCULATE HEALTH SCORE
     // --------------------------------------------------------
 
     const healthScore = calculateHealthScore({
@@ -257,7 +246,17 @@ const createInspection = async (req, res, next) => {
     const propertyCondition = mapPropertyCondition(overallCondition);
 
     // --------------------------------------------------------
-    // Create inspection
+    // SAVE OLD PROPERTY STATE
+    // --------------------------------------------------------
+
+    const oldPropertyState = {
+      condition: property.condition,
+      healthScore: property.health?.score ?? null,
+      lastInspectionAt: property.lastInspectionAt ?? null,
+    };
+
+    // --------------------------------------------------------
+    // CREATE INSPECTION
     // --------------------------------------------------------
 
     const inspection = await Inspection.create({
@@ -276,7 +275,7 @@ const createInspection = async (req, res, next) => {
     });
 
     // --------------------------------------------------------
-    // Synchronize Property
+    // UPDATE PROPERTY
     // --------------------------------------------------------
 
     property.condition = propertyCondition;
@@ -291,7 +290,57 @@ const createInspection = async (req, res, next) => {
     await property.save();
 
     // --------------------------------------------------------
-    // Populate response
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "INSPECTION_CREATED",
+      resourceType: "INSPECTION",
+      resourceId: inspection._id,
+      property: property._id,
+
+      description: `Inspection created for property "${property.title}"`,
+
+      oldValues: {
+        propertyCondition: oldPropertyState.condition,
+
+        propertyHealthScore: oldPropertyState.healthScore,
+
+        lastInspectionAt: oldPropertyState.lastInspectionAt,
+      },
+
+      newValues: {
+        overallCondition: inspection.overallCondition,
+
+        securityStatus: inspection.securityStatus,
+
+        electricalStatus: inspection.electricalStatus,
+
+        plumbingStatus: inspection.plumbingStatus,
+
+        cleanliness: inspection.cleanliness,
+
+        issuesFound: inspection.issuesFound,
+
+        notes: inspection.notes,
+
+        images: inspection.images,
+
+        inspectedAt: inspection.inspectedAt,
+
+        status: inspection.status,
+
+        propertyCondition: property.condition,
+
+        propertyHealthScore: property.health.score,
+
+        lastInspectionAt: property.lastInspectionAt,
+      },
+    });
+
+    // --------------------------------------------------------
+    // POPULATE INSPECTION RESPONSE
     // --------------------------------------------------------
 
     await inspection.populate([
@@ -307,7 +356,7 @@ const createInspection = async (req, res, next) => {
     ]);
 
     // --------------------------------------------------------
-    // Response
+    // RESPONSE
     // --------------------------------------------------------
 
     return res.status(201).json({
@@ -364,10 +413,6 @@ const getPropertyInspections = async (req, res, next) => {
       return next(createError("Invalid property ID", 400));
     }
 
-    // --------------------------------------------------------
-    // Verify active caretaker assignment
-    // --------------------------------------------------------
-
     const assignment = await CaretakerAssignment.findOne({
       property: propertyId,
       caretaker: req.user.userId,
@@ -380,10 +425,6 @@ const getPropertyInspections = async (req, res, next) => {
       );
     }
 
-    // --------------------------------------------------------
-    // Verify property
-    // --------------------------------------------------------
-
     const property = await Property.findOne({
       _id: propertyId,
       isActive: true,
@@ -393,10 +434,6 @@ const getPropertyInspections = async (req, res, next) => {
     if (!property) {
       return next(createError("Property not found or inactive", 404));
     }
-
-    // --------------------------------------------------------
-    // Get inspections
-    // --------------------------------------------------------
 
     const inspections = await Inspection.find({
       property: propertyId,
@@ -423,7 +460,7 @@ const getPropertyInspections = async (req, res, next) => {
 };
 
 // ============================================================
-// GET SINGLE INSPECTION
+// GET INSPECTION BY ID
 // ============================================================
 
 const getInspectionById = async (req, res, next) => {

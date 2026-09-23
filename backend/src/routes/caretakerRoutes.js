@@ -11,7 +11,7 @@ const {
   getCaretakerAssignmentHistory,
 } = require("../controllers/caretakerController");
 
-const protect = require("../middleware/authMiddleware");
+const authMiddleware = require("../middleware/authMiddleware");
 const authorize = require("../middleware/roleMiddleware");
 
 const router = express.Router();
@@ -20,47 +20,33 @@ const router = express.Router();
 // AUTHENTICATION
 // ============================================================
 
-router.use(protect);
+router.use(authMiddleware);
 
 // ============================================================
-// CARETAKER SELF-SERVICE
+// OWNER / ADMIN
 // ============================================================
 
-// Get all properties assigned to logged-in caretaker
-router.get("/my-properties", authorize("CARETAKER"), getMyAssignedProperties);
-
-// Get one property assigned to logged-in caretaker
-router.get(
-  "/my-properties/:propertyId",
-  authorize("CARETAKER"),
-  getAssignedPropertyDetails,
-);
-
-// ============================================================
-// OWNER / ADMIN CARETAKER MANAGEMENT
-// ============================================================
-
-// Create a new caretaker
+// Create caretaker
 router.post("/create", authorize("NRI_OWNER", "ADMIN"), createCaretaker);
 
 // Assign caretaker to property
 router.post("/assign", authorize("NRI_OWNER", "ADMIN"), assignCaretaker);
 
-// Get complete caretaker assignment history for a property
+// Get all caretaker assignments for a property
 router.get(
   "/property/:propertyId",
   authorize("NRI_OWNER", "ADMIN"),
   getPropertyCaretakers,
 );
 
-// Get currently assigned caretaker
+// Get current caretaker of a property
 router.get(
   "/property/:propertyId/current",
   authorize("NRI_OWNER", "ADMIN"),
   getCurrentCaretaker,
 );
 
-// End current caretaker assignment
+// End active caretaker assignment
 router.put(
   "/property/:propertyId/end",
   authorize("NRI_OWNER", "ADMIN"),
@@ -72,6 +58,20 @@ router.get(
   "/:caretakerId/history",
   authorize("NRI_OWNER", "ADMIN"),
   getCaretakerAssignmentHistory,
+);
+
+// ============================================================
+// CARETAKER
+// ============================================================
+
+// Get properties currently assigned to logged-in caretaker
+router.get("/my-properties", authorize("CARETAKER"), getMyAssignedProperties);
+
+// Get details of one assigned property
+router.get(
+  "/my-properties/:propertyId",
+  authorize("CARETAKER"),
+  getAssignedPropertyDetails,
 );
 
 module.exports = router;

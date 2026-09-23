@@ -3,6 +3,10 @@ const cors = require("cors");
 const helmet = require("helmet");
 require("dotenv").config();
 
+// ============================================================
+// ROUTES
+// ============================================================
+
 const authRoutes = require("./routes/authRoutes");
 const propertyRoutes = require("./routes/propertyRoutes");
 const monitoringRoutes = require("./routes/monitoringRoutes");
@@ -14,23 +18,26 @@ const documentRoutes = require("./routes/documentRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
+const auditLogRoutes = require("./routes/auditLogRoutes");
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
 
+// ============================================================
+// APP
+// ============================================================
+
 const app = express();
-
-const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
-
-// ============================================================
-// SECURITY
-// ============================================================
-
-app.use(helmet());
 
 // ============================================================
 // CORS
 // ============================================================
+
+const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
 
 app.use(
   cors({
@@ -40,7 +47,13 @@ app.use(
 );
 
 // ============================================================
-// BODY PARSING
+// SECURITY
+// ============================================================
+
+app.use(helmet());
+
+// ============================================================
+// BODY PARSERS
 // ============================================================
 
 app.use(express.json());
@@ -52,7 +65,7 @@ app.use(
 );
 
 // ============================================================
-// ROOT
+// ROOT / HEALTH CHECK
 // ============================================================
 
 app.get("/", (req, res) => {
@@ -85,6 +98,8 @@ app.use("/api/documents", documentRoutes);
 app.use("/api/notifications", notificationRoutes);
 
 app.use("/api/vendors", vendorRoutes);
+
+app.use("/api/audit-logs", auditLogRoutes);
 
 app.use("/api/dashboard", dashboardRoutes);
 

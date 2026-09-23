@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Property = require("../models/Property");
 const CaretakerAssignment = require("../models/CaretakerAssignment");
 const { hashPassword } = require("../utils/password");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -203,6 +204,26 @@ const createCaretaker = async (req, res, next) => {
     });
 
     // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "CARETAKER_CREATED",
+      resourceType: "USER",
+      resourceId: caretaker._id,
+      description: `Caretaker "${caretaker.name}" created successfully`,
+      newValues: {
+        name: caretaker.name,
+        email: caretaker.email,
+        role: caretaker.role,
+        isActive: caretaker.isActive,
+        isEmailVerified: caretaker.isEmailVerified,
+        phone: caretaker.phone,
+      },
+    });
+
+    // --------------------------------------------------------
     // Safe response
     // Never return password
     // --------------------------------------------------------
@@ -362,6 +383,29 @@ const assignCaretaker = async (req, res, next) => {
     property.caretaker = caretaker._id;
 
     await property.save();
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "CARETAKER_ASSIGNED",
+      resourceType: "CARETAKER_ASSIGNMENT",
+      resourceId: assignment._id,
+      property: property._id,
+      description: `Caretaker "${caretaker.name}" assigned to property "${property.title}"`,
+      newValues: {
+        caretaker: caretaker._id,
+        property: property._id,
+        assignedBy: req.user.userId,
+        assignedAt: assignment.assignedAt,
+        startDate: assignment.startDate,
+        status: assignment.status,
+        responsibilities: assignment.responsibilities,
+        notes: assignment.notes,
+      },
+    });
 
     // --------------------------------------------------------
     // Populate response
@@ -626,7 +670,6 @@ const getAssignedPropertyDetails = async (req, res, next) => {
       success: true,
       data: {
         property: assignment.property,
-
         assignment: {
           id: assignment._id,
           startDate: assignment.startDate,
@@ -652,6 +695,10 @@ const getAssignedPropertyDetails = async (req, res, next) => {
 const endCaretakerAssignment = async (req, res, next) => {
   try {
     const { propertyId } = req.params;
+
+    // --------------------------------------------------------
+    // Validate ID
+    // --------------------------------------------------------
 
     if (!isValidObjectId(propertyId)) {
       return next(createError("Invalid property ID", 400));
@@ -696,6 +743,22 @@ const endCaretakerAssignment = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
+    // Capture old values BEFORE modifying assignment
+    // --------------------------------------------------------
+
+    const oldValues = {
+      status: assignment.status,
+      caretaker: assignment.caretaker,
+      property: assignment.property,
+      assignedBy: assignment.assignedBy,
+      assignedAt: assignment.assignedAt,
+      startDate: assignment.startDate,
+      endDate: assignment.endDate,
+      responsibilities: assignment.responsibilities,
+      notes: assignment.notes,
+    };
+
+    // --------------------------------------------------------
     // Complete assignment
     // --------------------------------------------------------
 
@@ -713,6 +776,32 @@ const endCaretakerAssignment = async (req, res, next) => {
     property.caretaker = null;
 
     await property.save();
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "CARETAKER_ASSIGNMENT_ENDED",
+      resourceType: "CARETAKER_ASSIGNMENT",
+      resourceId: assignment._id,
+      property: property._id,
+      description: `Caretaker assignment for property "${property.title}" ended successfully`,
+      oldValues,
+      newValues: {
+        status: assignment.status,
+        caretaker: assignment.caretaker,
+        property: assignment.property,
+        assignedBy: assignment.assignedBy,
+        assignedAt: assignment.assignedAt,
+        startDate: assignment.startDate,
+        endDate: assignment.endDate,
+        responsibilities: assignment.responsibilities,
+        notes: assignment.notes,
+        propertyCaretaker: property.caretaker,
+      },
+    });
 
     // --------------------------------------------------------
     // Populate response
@@ -816,7 +905,6 @@ const getCaretakerAssignmentHistory = async (req, res, next) => {
           role: caretaker.role,
           isActive: caretaker.isActive,
         },
-
         assignments: filteredAssignments,
       },
     });

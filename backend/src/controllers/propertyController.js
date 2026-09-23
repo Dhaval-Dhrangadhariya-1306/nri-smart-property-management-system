@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const Property = require("../models/Property");
 const Inspection = require("../models/Inspection");
+const createAuditLog = require("../utils/auditLogger");
 
 // ============================================================
 // HELPERS
@@ -136,6 +137,27 @@ const createProperty = async (req, res, next) => {
     });
 
     // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "PROPERTY_CREATED",
+      resourceType: "PROPERTY",
+      resourceId: property._id,
+      property: property._id,
+      description: `Property "${property.title}" created successfully`,
+      newValues: {
+        title: property.title,
+        propertyType: property.propertyType,
+        occupancy: property.occupancy,
+        condition: property.condition,
+        status: property.status,
+        isActive: property.isActive,
+      },
+    });
+
+    // ----------------------------------------------------------
     // Populate owner and caretaker
     // ----------------------------------------------------------
 
@@ -257,6 +279,25 @@ const updateProperty = async (req, res, next) => {
     if (!property) {
       return next(createError("Property not found", 404));
     }
+
+    // ----------------------------------------------------------
+    // Store old values for future audit tracking
+    // ----------------------------------------------------------
+
+    const oldPropertyValues = {
+      title: property.title,
+      propertyType: property.propertyType,
+      address: property.address ? property.address.toObject() : null,
+      description: property.description,
+      area: property.area ? property.area.toObject() : null,
+      structure: property.structure,
+      occupancy: property.occupancy,
+      condition: property.condition,
+      security: property.security,
+      imageUrl: property.imageUrl,
+      caretaker: property.caretaker,
+      nextInspectionAt: property.nextInspectionAt,
+    };
 
     // ----------------------------------------------------------
     // Allowed fields
@@ -384,6 +425,34 @@ const updateProperty = async (req, res, next) => {
     ]);
 
     // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "PROPERTY_UPDATED",
+      resourceType: "PROPERTY",
+      resourceId: property._id,
+      property: property._id,
+      description: `Property "${property.title}" updated successfully`,
+      oldValues: oldPropertyValues,
+      newValues: {
+        title: property.title,
+        propertyType: property.propertyType,
+        address: property.address ? property.address.toObject() : null,
+        description: property.description,
+        area: property.area ? property.area.toObject() : null,
+        structure: property.structure,
+        occupancy: property.occupancy,
+        condition: property.condition,
+        security: property.security,
+        imageUrl: property.imageUrl,
+        caretaker: property.caretaker,
+        nextInspectionAt: property.nextInspectionAt,
+      },
+    });
+
+    // ----------------------------------------------------------
     // Response
     // ----------------------------------------------------------
 
@@ -432,6 +501,27 @@ const deleteProperty = async (req, res, next) => {
 
     await property.save();
 
+    // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "PROPERTY_ARCHIVED",
+      resourceType: "PROPERTY",
+      resourceId: property._id,
+      property: property._id,
+      description: `Property "${property.title}" archived successfully`,
+      oldValues: {
+        status: "ACTIVE",
+        isActive: true,
+      },
+      newValues: {
+        status: property.status,
+        isActive: property.isActive,
+      },
+    });
+
     res.status(200).json({
       success: true,
       message: "Property archived successfully",
@@ -440,10 +530,6 @@ const deleteProperty = async (req, res, next) => {
     next(error);
   }
 };
-
-// ============================================================
-// GET PROPERTY INSPECTION HISTORY
-// ============================================================
 
 // ============================================================
 // RESTORE / REACTIVATE PROPERTY
@@ -474,13 +560,19 @@ const restoreProperty = async (req, res, next) => {
       );
     }
 
+    // ----------------------------------------------------------
     // Reactivate property
+    // ----------------------------------------------------------
+
     property.isActive = true;
     property.status = "ACTIVE";
 
     await property.save();
 
+    // ----------------------------------------------------------
     // Populate owner and caretaker
+    // ----------------------------------------------------------
+
     await property.populate([
       {
         path: "owner",
@@ -491,6 +583,27 @@ const restoreProperty = async (req, res, next) => {
         select: "name email role",
       },
     ]);
+
+    // ----------------------------------------------------------
+    // AUDIT LOG
+    // ----------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "PROPERTY_RESTORED",
+      resourceType: "PROPERTY",
+      resourceId: property._id,
+      property: property._id,
+      description: `Property "${property.title}" restored successfully`,
+      oldValues: {
+        status: "ARCHIVED",
+        isActive: false,
+      },
+      newValues: {
+        status: property.status,
+        isActive: property.isActive,
+      },
+    });
 
     res.status(200).json({
       success: true,
@@ -503,6 +616,10 @@ const restoreProperty = async (req, res, next) => {
     next(error);
   }
 };
+
+// ============================================================
+// GET PROPERTY INSPECTION HISTORY
+// ============================================================
 
 const getPropertyInspectionHistory = async (req, res, next) => {
   try {
