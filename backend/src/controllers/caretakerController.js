@@ -6,6 +6,10 @@ const CaretakerAssignment = require("../models/CaretakerAssignment");
 const { hashPassword } = require("../utils/password");
 const createAuditLog = require("../utils/auditLogger");
 
+const {
+  createAutomatedNotification,
+} = require("../services/notificationService");
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -408,6 +412,33 @@ const assignCaretaker = async (req, res, next) => {
     });
 
     // --------------------------------------------------------
+    // AUTOMATED NOTIFICATION
+    // Notify the newly assigned caretaker
+    // --------------------------------------------------------
+
+    await createAutomatedNotification({
+      recipient: caretaker._id,
+      property: property._id,
+      type: "CARETAKER",
+      priority: "MEDIUM",
+      title: "Property Assignment",
+      message: `You have been assigned as caretaker for "${property.title}".`,
+      relatedEntity: {
+        entityType: "CARETAKER",
+        entityId: assignment._id,
+      },
+      actionUrl: `/caretakers/my-properties/${property._id}`,
+      metadata: {
+        assignmentId: assignment._id,
+        caretakerId: caretaker._id,
+        propertyId: property._id,
+        assignedBy: req.user.userId,
+        startDate: assignment.startDate,
+      },
+      eventKey: `CARETAKER_ASSIGNED:${assignment._id}`,
+    });
+
+    // --------------------------------------------------------
     // Populate response
     // --------------------------------------------------------
 
@@ -801,6 +832,33 @@ const endCaretakerAssignment = async (req, res, next) => {
         notes: assignment.notes,
         propertyCaretaker: property.caretaker,
       },
+    });
+
+    // --------------------------------------------------------
+    // AUTOMATED NOTIFICATION
+    // Notify the caretaker that their assignment has ended
+    // --------------------------------------------------------
+
+    await createAutomatedNotification({
+      recipient: assignment.caretaker,
+      property: property._id,
+      type: "CARETAKER",
+      priority: "MEDIUM",
+      title: "Assignment Ended",
+      message: `Your caretaker assignment for "${property.title}" has ended.`,
+      relatedEntity: {
+        entityType: "CARETAKER",
+        entityId: assignment._id,
+      },
+      actionUrl: `/caretakers/my-properties/${property._id}`,
+      metadata: {
+        assignmentId: assignment._id,
+        caretakerId: assignment.caretaker,
+        propertyId: property._id,
+        assignedBy: assignment.assignedBy,
+        endDate: assignment.endDate,
+      },
+      eventKey: `CARETAKER_ASSIGNMENT_ENDED:${assignment._id}`,
     });
 
     // --------------------------------------------------------

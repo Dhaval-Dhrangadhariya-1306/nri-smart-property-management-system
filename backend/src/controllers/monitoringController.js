@@ -3,6 +3,9 @@ const mongoose = require("mongoose");
 const MonitoringEvent = require("../models/MonitoringEvent");
 const Property = require("../models/Property");
 const createAuditLog = require("../utils/auditLogger");
+const {
+  createAutomatedNotification,
+} = require("../services/notificationService");
 
 // ============================================================
 // HELPERS
@@ -173,6 +176,59 @@ const createMonitoringEvent = async (req, res, next) => {
         isResolved: monitoringEvent.isResolved,
       },
     });
+
+    // ----------------------------------------------------------
+    // AUTOMATED OWNER NOTIFICATION
+    //
+    // Notify the property owner when:
+    //
+    // 1. An ADMIN creates the monitoring event.
+    // 2. An OWNER creates a HIGH severity event.
+    // 3. An OWNER creates a CRITICAL severity event.
+    //
+    // Normal owner-created INFO / LOW / MEDIUM events do not
+    // generate self-notifications.
+    // ----------------------------------------------------------
+
+    const shouldNotifyOwner =
+      req.user.role === "ADMIN" ||
+      ["HIGH", "CRITICAL"].includes(monitoringEvent.severity);
+
+    if (shouldNotifyOwner) {
+      const notificationPriority =
+        monitoringEvent.severity === "CRITICAL"
+          ? "URGENT"
+          : monitoringEvent.severity === "HIGH"
+            ? "HIGH"
+            : "MEDIUM";
+
+      await createAutomatedNotification({
+        recipient: property.owner,
+        property: property._id,
+        type: "MONITORING",
+        priority: notificationPriority,
+        title: "Monitoring Alert",
+        message: `A ${monitoringEvent.severity.toLowerCase()}-severity monitoring event "${monitoringEvent.title}" was recorded for "${property.title}".`,
+        relatedEntity: {
+          entityType: "MONITORING",
+          entityId: monitoringEvent._id,
+        },
+        actionUrl: `/monitoring/${monitoringEvent._id}`,
+        metadata: {
+          monitoringEventId: monitoringEvent._id,
+          eventType: monitoringEvent.eventType,
+          severity: monitoringEvent.severity,
+          source: monitoringEvent.source,
+          actorId: req.user.userId,
+          actorRole: req.user.role,
+        },
+        eventKey: `MONITORING_EVENT_CREATED:${monitoringEvent._id}`,
+      });
+    }
+
+    // ----------------------------------------------------------
+    // POPULATE RESPONSE
+    // ----------------------------------------------------------
 
     await monitoringEvent.populate([
       {

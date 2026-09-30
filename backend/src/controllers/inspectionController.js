@@ -4,6 +4,9 @@ const Inspection = require("../models/Inspection");
 const CaretakerAssignment = require("../models/CaretakerAssignment");
 const Property = require("../models/Property");
 const createAuditLog = require("../utils/auditLogger");
+const {
+  createAutomatedNotification,
+} = require("../services/notificationService");
 
 // ============================================================
 // HELPERS
@@ -304,39 +307,47 @@ const createInspection = async (req, res, next) => {
 
       oldValues: {
         propertyCondition: oldPropertyState.condition,
-
         propertyHealthScore: oldPropertyState.healthScore,
-
         lastInspectionAt: oldPropertyState.lastInspectionAt,
       },
 
       newValues: {
         overallCondition: inspection.overallCondition,
-
         securityStatus: inspection.securityStatus,
-
         electricalStatus: inspection.electricalStatus,
-
         plumbingStatus: inspection.plumbingStatus,
-
         cleanliness: inspection.cleanliness,
-
         issuesFound: inspection.issuesFound,
-
         notes: inspection.notes,
-
         images: inspection.images,
-
         inspectedAt: inspection.inspectedAt,
-
         status: inspection.status,
-
         propertyCondition: property.condition,
-
         propertyHealthScore: property.health.score,
-
         lastInspectionAt: property.lastInspectionAt,
       },
+    });
+
+    // --------------------------------------------------------
+    // AUTOMATED NOTIFICATION
+    // --------------------------------------------------------
+
+    await createAutomatedNotification({
+      recipient: property.owner,
+      property: property._id,
+      type: "INSPECTION",
+      priority: "MEDIUM",
+      title: "Inspection Completed",
+      message: `A property inspection for "${property.title}" has been completed.`,
+      relatedEntity: {
+        entityType: "INSPECTION",
+        entityId: inspection._id,
+      },
+      metadata: {
+        inspectionId: inspection._id,
+        caretakerId: req.user.userId,
+      },
+      eventKey: `INSPECTION_COMPLETED:${inspection._id}`,
     });
 
     // --------------------------------------------------------

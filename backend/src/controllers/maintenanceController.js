@@ -7,6 +7,10 @@ const MaintenanceRequest = require("../models/MaintenanceRequest");
 const Vendor = require("../models/Vendor");
 const createAuditLog = require("../utils/auditLogger");
 
+const {
+  createAutomatedNotification,
+} = require("../services/notificationService");
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -868,6 +872,30 @@ const updateMaintenanceStatus = async (req, res, next) => {
           completedAt: request.completedAt,
           vendorCompletedAt: request.vendorCompletedAt,
         },
+      });
+    }
+
+    // --------------------------------------------------------
+    // AUTOMATED NOTIFICATION: MAINTENANCE COMPLETED
+    // --------------------------------------------------------
+
+    if (status === "COMPLETED") {
+      await createAutomatedNotification({
+        recipient: request.reportedBy,
+        property: request.property,
+        type: "MAINTENANCE",
+        priority: "MEDIUM",
+        title: "Maintenance Completed",
+        message: `Maintenance request "${request.title}" has been completed.`,
+        relatedEntity: {
+          entityType: "MAINTENANCE",
+          entityId: request._id,
+        },
+        metadata: {
+          maintenanceRequestId: request._id,
+          caretakerId: req.user.userId,
+        },
+        eventKey: `MAINTENANCE_COMPLETED:${request._id}`,
       });
     }
 

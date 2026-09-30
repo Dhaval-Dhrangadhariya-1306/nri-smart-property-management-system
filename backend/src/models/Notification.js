@@ -152,6 +152,26 @@ notificationSchema.index({
 });
 
 // ============================================================
+// AUTOMATED NOTIFICATION DUPLICATE PROTECTION
+// ============================================================
+//
+// Only automated notifications that contain
+// metadata.automationEventKey participate in this unique index.
+//
+// Manual notifications without automationEventKey are unaffected.
+//
+
+notificationSchema.index(
+  {
+    "metadata.automationEventKey": 1,
+  },
+  {
+    unique: true,
+    sparse: true,
+  },
+);
+
+// ============================================================
 // MODEL
 // ============================================================
 
