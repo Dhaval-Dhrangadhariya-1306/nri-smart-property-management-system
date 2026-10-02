@@ -15,6 +15,12 @@ const User = require("../models/User");
  * The second layer protects against race conditions where two
  * requests attempt to create the same automated notification
  * at nearly the same time.
+ *
+ * Return value:
+ * {
+ *   notification: Notification document,
+ *   created: true/false
+ * }
  */
 const createAutomatedNotification = async ({
   recipient,
@@ -80,7 +86,10 @@ const createAutomatedNotification = async ({
       }).select("_id");
 
       if (existingNotification) {
-        return existingNotification;
+        return {
+          notification: existingNotification,
+          created: false,
+        };
       }
     }
 
@@ -115,7 +124,10 @@ const createAutomatedNotification = async ({
         metadata: notificationMetadata,
       });
 
-      return notification;
+      return {
+        notification,
+        created: true,
+      };
     } catch (error) {
       // --------------------------------------------------------
       // DATABASE-LEVEL DUPLICATE PROTECTION
@@ -134,7 +146,12 @@ const createAutomatedNotification = async ({
           "metadata.automationEventKey": eventKey,
         });
 
-        return existingNotification || null;
+        return existingNotification
+          ? {
+              notification: existingNotification,
+              created: false,
+            }
+          : null;
       }
 
       throw error;
