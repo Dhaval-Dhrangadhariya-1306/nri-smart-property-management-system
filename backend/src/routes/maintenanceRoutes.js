@@ -7,6 +7,7 @@ const {
   getCaretakerMaintenanceRequests,
   assignVendorToMaintenance,
   updateMaintenanceStatus,
+  cancelMaintenanceRequest,
   getMaintenanceRequestById,
 } = require("../controllers/maintenanceController");
 
@@ -43,6 +44,13 @@ router.patch(
   "/:requestId/vendor",
   authorize("NRI_OWNER", "ADMIN"),
   assignVendorToMaintenance,
+);
+
+// Cancel maintenance request
+router.patch(
+  "/:requestId/cancel",
+  authorize("NRI_OWNER", "ADMIN"),
+  cancelMaintenanceRequest,
 );
 
 // ============================================================

@@ -4,6 +4,8 @@ const Property = require("../models/Property");
 const Inspection = require("../models/Inspection");
 const createAuditLog = require("../utils/auditLogger");
 
+const { getPropertyRiskScore } = require("../services/propertyRiskService");
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -845,6 +847,58 @@ const getPropertyStats = async (req, res, next) => {
 };
 
 // ============================================================
+// GET PROPERTY AI RISK SCORE
+// ============================================================
+
+const getPropertyRisk = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // ----------------------------------------------------------
+    // Validate property ID
+    // ----------------------------------------------------------
+
+    if (!isValidObjectId(id)) {
+      return next(createError("Invalid property ID", 400));
+    }
+
+    // ----------------------------------------------------------
+    // Verify ownership
+    // ----------------------------------------------------------
+
+    const property = await Property.findOne({
+      _id: id,
+      owner: req.user.userId,
+      isActive: true,
+      status: "ACTIVE",
+    }).select("_id title");
+
+    if (!property) {
+      return next(createError("Property not found", 404));
+    }
+
+    // ----------------------------------------------------------
+    // Calculate risk
+    // ----------------------------------------------------------
+
+    const risk = await getPropertyRiskScore(id);
+
+    // ----------------------------------------------------------
+    // Response
+    // ----------------------------------------------------------
+
+    res.status(200).json({
+      success: true,
+      data: {
+        risk,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
@@ -857,4 +911,5 @@ module.exports = {
   restoreProperty,
   getPropertyInspectionHistory,
   getPropertyStats,
+  getPropertyRisk,
 };

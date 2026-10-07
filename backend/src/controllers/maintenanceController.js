@@ -5,6 +5,7 @@ const Inspection = require("../models/Inspection");
 const CaretakerAssignment = require("../models/CaretakerAssignment");
 const MaintenanceRequest = require("../models/MaintenanceRequest");
 const Vendor = require("../models/Vendor");
+
 const createAuditLog = require("../utils/auditLogger");
 
 const {
@@ -94,8 +95,6 @@ const validateVendorForOwner = async (
     );
   }
 
-  // Vendor categories that map directly to maintenance categories.
-  // OTHER vendor can be used for any maintenance category.
   const categoryCompatible =
     vendor.category === "OTHER" ||
     vendor.category === maintenanceCategory ||
@@ -291,7 +290,6 @@ const createMaintenanceRequest = async (req, res, next) => {
       reportedBy: req.user.userId,
       assignedCaretaker,
       assignedVendor: vendor ? vendor._id : null,
-
       inspection: inspection ? inspection._id : null,
 
       title: title.trim(),
@@ -309,7 +307,6 @@ const createMaintenanceRequest = async (req, res, next) => {
       notes: notes ? notes.trim() : "",
 
       assignedAt: assignedCaretaker ? new Date() : null,
-
       vendorAssignedAt: vendor ? new Date() : null,
     });
 
@@ -338,34 +335,22 @@ const createMaintenanceRequest = async (req, res, next) => {
       resourceType: "MAINTENANCE_REQUEST",
       resourceId: maintenanceRequest._id,
       property: property._id,
-
       description: `Maintenance request "${maintenanceRequest.title}" created for property "${property.title}"`,
-
       oldValues: null,
-
       newValues: {
         title: maintenanceRequest.title,
         description: maintenanceRequest.description,
         category: maintenanceRequest.category,
         priority: maintenanceRequest.priority,
         status: maintenanceRequest.status,
-
         assignedCaretaker: maintenanceRequest.assignedCaretaker,
-
         assignedVendor: maintenanceRequest.assignedVendor,
-
         inspection: maintenanceRequest.inspection,
-
         estimatedCost: maintenanceRequest.estimatedCost,
-
         actualCost: maintenanceRequest.actualCost,
-
         images: maintenanceRequest.images,
-
         notes: maintenanceRequest.notes,
-
         assignedAt: maintenanceRequest.assignedAt,
-
         vendorAssignedAt: maintenanceRequest.vendorAssignedAt,
       },
     });
@@ -629,14 +614,11 @@ const assignVendorToMaintenance = async (req, res, next) => {
       resourceType: "MAINTENANCE_REQUEST",
       resourceId: request._id,
       property: request.property,
-
       description: `Vendor assigned to maintenance request "${request.title}"`,
-
       oldValues: {
         assignedVendor: oldVendorId,
         vendorAssignedAt: oldVendorAssignedAt,
       },
-
       newValues: {
         assignedVendor: vendor._id,
         vendorAssignedAt: request.vendorAssignedAt,
@@ -717,9 +699,7 @@ const updateMaintenanceStatus = async (req, res, next) => {
 
     const validTransitions = {
       ASSIGNED: ["IN_PROGRESS", "ON_HOLD", "CANCELLED"],
-
       IN_PROGRESS: ["ON_HOLD", "COMPLETED", "CANCELLED"],
-
       ON_HOLD: ["IN_PROGRESS", "CANCELLED"],
     };
 
@@ -830,11 +810,8 @@ const updateMaintenanceStatus = async (req, res, next) => {
       resourceType: "MAINTENANCE_REQUEST",
       resourceId: request._id,
       property: request.property,
-
       description: `Maintenance request "${request.title}" status changed from ${oldMaintenanceState.status} to ${request.status}`,
-
       oldValues: oldMaintenanceState,
-
       newValues: {
         status: request.status,
         actualCost: request.actualCost,
@@ -856,16 +833,13 @@ const updateMaintenanceStatus = async (req, res, next) => {
         resourceType: "MAINTENANCE_REQUEST",
         resourceId: request._id,
         property: request.property,
-
         description: `Maintenance request "${request.title}" was completed`,
-
         oldValues: {
           status: oldMaintenanceState.status,
           actualCost: oldMaintenanceState.actualCost,
           completedAt: oldMaintenanceState.completedAt,
           vendorCompletedAt: oldMaintenanceState.vendorCompletedAt,
         },
-
         newValues: {
           status: request.status,
           actualCost: request.actualCost,
@@ -904,6 +878,117 @@ const updateMaintenanceStatus = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Maintenance status updated successfully",
+      data: {
+        maintenanceRequest: request,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
+// CANCEL MAINTENANCE REQUEST
+// ============================================================
+
+const cancelMaintenanceRequest = async (req, res, next) => {
+  try {
+    const { requestId } = req.params;
+
+    if (!isValidObjectId(requestId)) {
+      return next(createError("Invalid maintenance request ID"));
+    }
+
+    // --------------------------------------------------------
+    // Ownership / ADMIN access
+    // --------------------------------------------------------
+
+    const requestQuery = {
+      _id: requestId,
+    };
+
+    // Owners can cancel only their own requests.
+    // Admins can manage any maintenance request.
+    if (req.user.role === "NRI_OWNER") {
+      requestQuery.reportedBy = req.user.userId;
+    }
+
+    const request = await MaintenanceRequest.findOne(requestQuery);
+
+    if (!request) {
+      return next(
+        createError("Maintenance request not found or access denied", 404),
+      );
+    }
+
+    // --------------------------------------------------------
+    // Prevent invalid cancellation
+    // --------------------------------------------------------
+
+    if (request.status === "COMPLETED") {
+      return next(
+        createError("Completed maintenance requests cannot be cancelled"),
+      );
+    }
+
+    if (request.status === "CANCELLED") {
+      return next(createError("Maintenance request is already cancelled"));
+    }
+
+    // --------------------------------------------------------
+    // Capture old state for audit
+    // --------------------------------------------------------
+
+    const oldMaintenanceState = {
+      status: request.status,
+      priority: request.priority,
+      assignedCaretaker: request.assignedCaretaker,
+      assignedVendor: request.assignedVendor,
+      vendorAssignedAt: request.vendorAssignedAt,
+      estimatedCost: request.estimatedCost,
+      actualCost: request.actualCost,
+      startedAt: request.startedAt,
+      completedAt: request.completedAt,
+      vendorCompletedAt: request.vendorCompletedAt,
+    };
+
+    // --------------------------------------------------------
+    // Cancel request
+    // --------------------------------------------------------
+
+    request.status = "CANCELLED";
+
+    // Do NOT modify historical timestamps or assignments.
+    // They remain useful for audit/history.
+
+    await request.save();
+
+    // --------------------------------------------------------
+    // AUDIT: MAINTENANCE CANCELLED
+    // --------------------------------------------------------
+
+    await createAuditLog({
+      req,
+      action: "MAINTENANCE_CANCELLED",
+      resourceType: "MAINTENANCE_REQUEST",
+      resourceId: request._id,
+      property: request.property,
+      description: `Maintenance request "${request.title}" was cancelled`,
+      oldValues: oldMaintenanceState,
+      newValues: {
+        status: request.status,
+      },
+    });
+
+    // --------------------------------------------------------
+    // Return updated request
+    // --------------------------------------------------------
+
+    await populateMaintenanceRequest(request);
+
+    return res.status(200).json({
+      success: true,
+      message: "Maintenance request cancelled successfully",
       data: {
         maintenanceRequest: request,
       },
@@ -977,5 +1062,6 @@ module.exports = {
   getCaretakerMaintenanceRequests,
   assignVendorToMaintenance,
   updateMaintenanceStatus,
+  cancelMaintenanceRequest,
   getMaintenanceRequestById,
 };
