@@ -9,6 +9,7 @@ require("dotenv").config();
 
 const authRoutes = require("./routes/authRoutes");
 const propertyRoutes = require("./routes/propertyRoutes");
+const expenseInsightRoutes = require("./routes/expenseInsightRoutes");
 const monitoringRoutes = require("./routes/monitoringRoutes");
 const caretakerRoutes = require("./routes/caretakerRoutes");
 const inspectionRoutes = require("./routes/inspectionRoutes");
@@ -19,6 +20,7 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
 const auditLogRoutes = require("./routes/auditLogRoutes");
+
 
 // ============================================================
 // MIDDLEWARE
@@ -78,6 +80,8 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 
 app.use("/api/properties", propertyRoutes);
+
+app.use("/api/expenses/insights", expenseInsightRoutes);
 
 app.use("/api/monitoring", monitoringRoutes);
 
