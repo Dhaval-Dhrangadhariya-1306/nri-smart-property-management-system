@@ -3,6 +3,22 @@ const AuditLog = require("../models/AuditLog");
 const Property = require("../models/Property");
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+const createHttpError = (message, statusCode) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+const isValidObjectId = (id) =>
+  typeof id === "string" && mongoose.Types.ObjectId.isValid(id);
+
+const isNonEmptyString = (value) =>
+  typeof value === "string" && value.trim().length > 0;
+
+// ============================================================
 // GET MY AUDIT LOGS
 // ============================================================
 
@@ -15,7 +31,7 @@ const getMyAuditLogs = async (req, res, next) => {
     })
       .populate("actor", "name email role isActive")
       .populate("property", "title propertyType address")
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(100)
       .lean();
 
@@ -26,7 +42,7 @@ const getMyAuditLogs = async (req, res, next) => {
       data: logs,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -39,20 +55,11 @@ const getPropertyAuditLogs = async (req, res, next) => {
     const ownerId = req.user.userId;
     const { propertyId } = req.params;
 
-    // --------------------------------------------------------
-    // Validate ObjectId
-    // --------------------------------------------------------
-
-    if (!mongoose.Types.ObjectId.isValid(propertyId)) {
-      const error = new Error("Invalid property ID");
-      error.statusCode = 400;
-      return next(error);
+    if (!isValidObjectId(propertyId)) {
+      return next(createHttpError("Invalid property ID", 400));
     }
 
-    // --------------------------------------------------------
-    // Verify property belongs to current owner
-    // --------------------------------------------------------
-
+    // Verify ownership before retrieving any logs.
     const property = await Property.findOne({
       _id: propertyId,
       owner: ownerId,
@@ -61,21 +68,15 @@ const getPropertyAuditLogs = async (req, res, next) => {
       .lean();
 
     if (!property) {
-      const error = new Error("Property not found");
-      error.statusCode = 404;
-      return next(error);
+      return next(createHttpError("Property not found", 404));
     }
-
-    // --------------------------------------------------------
-    // Get logs
-    // --------------------------------------------------------
 
     const logs = await AuditLog.find({
       property: propertyId,
     })
       .populate("actor", "name email role isActive")
       .populate("property", "title propertyType address")
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(200)
       .lean();
 
@@ -87,7 +88,7 @@ const getPropertyAuditLogs = async (req, res, next) => {
       data: logs,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -100,20 +101,115 @@ const getPropertyActivityTimeline = async (req, res, next) => {
     const ownerId = req.user.userId;
     const { propertyId } = req.params;
 
-    // --------------------------------------------------------
-    // Validate ObjectId
-    // --------------------------------------------------------
+    const {
+      page = "1",
+      limit = "20",
+      action,
+      resourceType,
+      from,
+      to,
+    } = req.query;
 
-    if (!mongoose.Types.ObjectId.isValid(propertyId)) {
-      const error = new Error("Invalid property ID");
-      error.statusCode = 400;
-      return next(error);
+    // Validate property ID.
+    if (!isValidObjectId(propertyId)) {
+      return next(createHttpError("Invalid property ID", 400));
     }
 
-    // --------------------------------------------------------
-    // Verify property ownership
-    // --------------------------------------------------------
+    // Validate query parameter types before using string methods.
+    for (const [name, value] of [
+      ["page", page],
+      ["limit", limit],
+      ["action", action],
+      ["resourceType", resourceType],
+      ["from", from],
+      ["to", to],
+    ]) {
+      if (value !== undefined && typeof value !== "string") {
+        return next(
+          createHttpError(`${name} must be a single string value`, 400),
+        );
+      }
+    }
 
+    // Validate pagination.
+    if (!/^[1-9]\d*$/.test(page) || !/^[1-9]\d*$/.test(limit)) {
+      return next(
+        createHttpError(
+          "page must be a positive integer and limit must be a positive integer",
+          400,
+        ),
+      );
+    }
+
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+
+    if (
+      !Number.isSafeInteger(pageNumber) ||
+      !Number.isSafeInteger(pageSize) ||
+      pageSize > 100
+    ) {
+      return next(
+        createHttpError(
+          "Invalid pagination values. Limit must not exceed 100",
+          400,
+        ),
+      );
+    }
+
+    // Prevent unsafe or unreasonable skip values.
+    const skip = (pageNumber - 1) * pageSize;
+
+    if (!Number.isSafeInteger(skip)) {
+      return next(createHttpError("Pagination value is too large", 400));
+    }
+
+    // Validate optional action and resource filters.
+    if (action !== undefined && !isNonEmptyString(action)) {
+      return next(createHttpError("action must be a non-empty string", 400));
+    }
+
+    if (resourceType !== undefined && !isNonEmptyString(resourceType)) {
+      return next(
+        createHttpError("resourceType must be a non-empty string", 400),
+      );
+    }
+
+    // Validate optional date filters.
+    let fromDate;
+    let toDate;
+
+    if (from !== undefined) {
+      if (!isNonEmptyString(from)) {
+        return next(createHttpError("from must be a valid date string", 400));
+      }
+
+      fromDate = new Date(from);
+
+      if (Number.isNaN(fromDate.getTime())) {
+        return next(createHttpError("Invalid from date", 400));
+      }
+    }
+
+    if (to !== undefined) {
+      if (!isNonEmptyString(to)) {
+        return next(createHttpError("to must be a valid date string", 400));
+      }
+
+      toDate = new Date(to);
+
+      if (Number.isNaN(toDate.getTime())) {
+        return next(createHttpError("Invalid to date", 400));
+      }
+    }
+
+    if (fromDate && toDate && fromDate > toDate) {
+      return next(
+        createHttpError("'from' date must not be after 'to' date", 400),
+      );
+    }
+
+    // Verify property ownership before querying the timeline.
     const property = await Property.findOne({
       _id: propertyId,
       owner: ownerId,
@@ -122,26 +218,42 @@ const getPropertyActivityTimeline = async (req, res, next) => {
       .lean();
 
     if (!property) {
-      const error = new Error("Property not found");
-      error.statusCode = 404;
-      return next(error);
+      return next(createHttpError("Property not found", 404));
     }
 
-    // --------------------------------------------------------
-    // Retrieve activity records
-    // --------------------------------------------------------
-
-    const logs = await AuditLog.find({
+    // Construct a filter from validated inputs only.
+    const filter = {
       property: propertyId,
-    })
-      .populate("actor", "name email role isActive")
-      .sort({ createdAt: -1 })
-      .limit(200)
-      .lean();
+    };
 
-    // --------------------------------------------------------
-    // Convert audit records into timeline records
-    // --------------------------------------------------------
+    if (action !== undefined) {
+      filter.action = action.trim().toUpperCase();
+    }
+
+    if (resourceType !== undefined) {
+      filter.resourceType = resourceType.trim().toUpperCase();
+    }
+
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+
+      if (fromDate) {
+        filter.createdAt.$gte = fromDate;
+      }
+
+      if (toDate) {
+        filter.createdAt.$lte = toDate;
+      }
+    }
+
+    const total = await AuditLog.countDocuments(filter);
+
+    const logs = await AuditLog.find(filter)
+      .populate("actor", "name email role isActive")
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(pageSize)
+      .lean();
 
     const timeline = logs.map((log) => ({
       id: log._id,
@@ -158,10 +270,18 @@ const getPropertyActivityTimeline = async (req, res, next) => {
       message: "Property activity timeline retrieved successfully",
       property,
       count: timeline.length,
+      pagination: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+        hasNextPage: skip + timeline.length < total,
+        hasPreviousPage: pageNumber > 1,
+      },
       data: timeline,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -174,19 +294,9 @@ const getAuditLogById = async (req, res, next) => {
     const ownerId = req.user.userId;
     const { id } = req.params;
 
-    // --------------------------------------------------------
-    // Validate ObjectId
-    // --------------------------------------------------------
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      const error = new Error("Invalid audit log ID");
-      error.statusCode = 400;
-      return next(error);
+    if (!isValidObjectId(id)) {
+      return next(createHttpError("Invalid audit log ID", 400));
     }
-
-    // --------------------------------------------------------
-    // Find audit log
-    // --------------------------------------------------------
 
     const log = await AuditLog.findById(id)
       .populate("actor", "name email role isActive")
@@ -194,40 +304,27 @@ const getAuditLogById = async (req, res, next) => {
       .lean();
 
     if (!log) {
-      const error = new Error("Audit log not found");
-      error.statusCode = 404;
-      return next(error);
+      return next(createHttpError("Audit log not found", 404));
     }
 
-    // --------------------------------------------------------
-    // Security check
-    //
-    // Owner can access:
-    // 1. Their own audit log
-    // 2. An audit log belonging to their property
-    // --------------------------------------------------------
-
-    const actorOwnLog =
-      log.actor && log.actor._id && log.actor._id.toString() === ownerId;
+    // The owner can access their own logs or logs for their
+    // currently owned properties.
+    const actorOwnLog = log.actor?._id?.toString() === ownerId.toString();
 
     let propertyOwnLog = false;
 
-    if (log.property && log.property._id) {
-      const property = await Property.findOne({
-        _id: log.property._id,
-        owner: ownerId,
-        isActive: true,
-      })
-        .select("_id")
-        .lean();
-
-      propertyOwnLog = Boolean(property);
+    if (log.property?._id) {
+      propertyOwnLog = Boolean(
+        await Property.exists({
+          _id: log.property._id,
+          owner: ownerId,
+          isActive: true,
+        }),
+      );
     }
 
     if (!actorOwnLog && !propertyOwnLog) {
-      const error = new Error("Audit log not found");
-      error.statusCode = 404;
-      return next(error);
+      return next(createHttpError("Audit log not found", 404));
     }
 
     return res.status(200).json({
@@ -236,7 +333,7 @@ const getAuditLogById = async (req, res, next) => {
       data: log,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 

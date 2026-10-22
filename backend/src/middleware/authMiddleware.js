@@ -67,8 +67,8 @@ const protect = async (req, res, next) => {
     // ----------------------------------------------------------
 
     if (
-      decoded.tokenVersion !== undefined &&
-      decoded.tokenVersion !== user.tokenVersion
+      !Number.isInteger(decoded.tokenVersion) ||
+      decoded.tokenVersion !== (user.tokenVersion ?? 0)
     ) {
       const error = new Error("Authentication session is no longer valid");
       error.statusCode = 401;

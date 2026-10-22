@@ -5,21 +5,24 @@ const assert = require("node:assert/strict");
 // CONFIGURATION
 // ============================================================
 
-const BASE_URL = process.env.TEST_BASE_URL || "http://localhost:5000";
+// ============================================================
+// CONFIGURATION
+// ============================================================
 
-const OWNER_EMAIL = process.env.TEST_OWNER_EMAIL || "YOUR_OWNER_EMAIL";
+const BASE_URL = process.env.TEST_BASE_URL || "http://localhost:5001";
 
-const OWNER_PASSWORD = process.env.TEST_OWNER_PASSWORD || "YOUR_OWNER_PASSWORD";
+const OWNER_EMAIL = process.env.TEST_OWNER_EMAIL || "testnri@example.com";
 
-const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "YOUR_ADMIN_EMAIL";
+const OWNER_PASSWORD = process.env.TEST_OWNER_PASSWORD || "Test@12345";
 
-const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "YOUR_ADMIN_PASSWORD";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "admin.test@example.com";
+
+const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "AdminTest@123";
 
 const PROPERTY_ID = process.env.TEST_PROPERTY_ID || "6aa97840f532befd1c175245";
 
 const OTHER_OWNER_PROPERTY_ID =
-  process.env.TEST_OTHER_OWNER_PROPERTY_ID ||
-  "REPLACE_WITH_OTHER_OWNER_PROPERTY_ID";
+  process.env.TEST_OTHER_OWNER_PROPERTY_ID || "6aa98002f532befd1c175247";
 
 // ============================================================
 // HELPERS
@@ -233,32 +236,29 @@ test("unauthenticated request should return 401", async () => {
 // RESPONSE STRUCTURE
 // ============================================================
 
-test(
-  "owner insights response should contain the complete analytics structure",
-  async () => {
-    const result = await getInsights(
-      ownerToken,
-      `?propertyId=${PROPERTY_ID}&period=12M`,
-    );
+test("owner insights response should contain the complete analytics structure", async () => {
+  const result = await getInsights(
+    ownerToken,
+    `?propertyId=${PROPERTY_ID}&period=12M`,
+  );
 
-    assert.equal(result.status, 200);
+  assert.equal(result.status, 200);
 
-    const data = result.body.data;
+  const data = result.body.data;
 
-    assert.ok(data.overview);
-    assert.ok(data.trends);
-    assert.ok(data.trends.monthly);
-    assert.ok(data.categories);
-    assert.ok(data.anomalies);
-    assert.ok(data.recurringExpenses);
-    assert.ok(data.maintenanceAnalysis);
-    assert.ok(data.vendorAnalysis);
-    assert.ok(data.healthScore);
-    assert.ok(data.confidence);
-    assert.ok(data.actionableInsights);
-    assert.ok(data.dataQuality);
-  },
-);
+  assert.ok(data.overview);
+  assert.ok(data.trends);
+  assert.ok(data.trends.monthly);
+  assert.ok(data.categories);
+  assert.ok(data.anomalies);
+  assert.ok(data.recurringExpenses);
+  assert.ok(data.maintenanceAnalysis);
+  assert.ok(data.vendorAnalysis);
+  assert.ok(data.healthScore);
+  assert.ok(data.confidence);
+  assert.ok(data.actionableInsights);
+  assert.ok(data.dataQuality);
+});
 
 // ============================================================
 // DATA QUALITY

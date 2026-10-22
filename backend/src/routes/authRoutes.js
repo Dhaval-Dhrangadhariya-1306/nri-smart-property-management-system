@@ -9,15 +9,20 @@ const {
 
 const protect = require("../middleware/authMiddleware");
 
+const {
+  loginLimiter,
+  registerLimiter,
+} = require("../middleware/authRateLimiters");
+
 const router = express.Router();
 
 // =========================
 // PUBLIC AUTHENTICATION ROUTES
 // =========================
 
-router.post("/register", register);
+router.post("/register", registerLimiter, register);
 
-router.post("/login", login);
+router.post("/login", loginLimiter, login);
 
 // =========================
 // PROTECTED AUTHENTICATION ROUTES
@@ -26,11 +31,15 @@ router.post("/login", login);
 router.get("/me", protect, getMe);
 
 // =========================
-// TEMPORARY DEVELOPMENT ROUTE
+// DEVELOPMENT-ONLY ROUTE
+// Register only when explicitly enabled outside production.
 // =========================
-// Used only for development/testing.
-// REMOVE THIS ROUTE BEFORE PRODUCTION.
 
-router.post("/dev/reset-caretaker-password", resetCaretakerPassword);
+if (
+  process.env.NODE_ENV !== "production" &&
+  process.env.AUTH_DEV_MODE === "true"
+) {
+  router.post("/dev/reset-caretaker-password", resetCaretakerPassword);
+}
 
 module.exports = router;
