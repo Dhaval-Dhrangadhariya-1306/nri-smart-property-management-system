@@ -1,29 +1,92 @@
+const { DateTime } = require("luxon");
+
 const Document = require("../models/Document");
 const createAutomatedNotification =
   require("../services/notificationService").createAutomatedNotification;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const JOB_TIMEZONE = process.env.JOB_TIMEZONE || "Asia/Kolkata";
+
+// ============================================================
+// DATE HELPERS
+// ============================================================
 
 /**
- * Get the start of a calendar day.
- *
- * Using calendar-day boundaries makes the job predictable
- * regardless of the exact time the scheduler executes.
+ * Get the start of the current calendar day in the job timezone.
  */
 const startOfDay = (date = new Date()) => {
-  const result = new Date(date);
-  result.setHours(0, 0, 0, 0);
+  const result = DateTime.fromJSDate(date, {
+    zone: JOB_TIMEZONE,
+  }).startOf("day");
+
+  if (!result.isValid) {
+    throw new Error(
+      `Unable to calculate start of day: ${result.invalidReason}`,
+    );
+  }
+
+  return result.toJSDate();
+};
+
+/**
+ * Get the start of a calendar day a specified number of days
+ * after the supplied date.
+ */
+const getStartOfDayAfter = (date, days) => {
+  const result = DateTime.fromJSDate(date, {
+    zone: JOB_TIMEZONE,
+  })
+    .startOf("day")
+    .plus({ days });
+
+  if (!result.isValid) {
+    throw new Error(
+      `Unable to calculate date boundary: ${result.invalidReason}`,
+    );
+  }
+
+  return result.toJSDate();
+};
+
+/**
+ * Get the expiry date as YYYY-MM-DD in the configured timezone.
+ */
+const getExpiryDateKey = (expiryDate) => {
+  const date = new Date(expiryDate);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Invalid document expiry date");
+  }
+
+  const result = DateTime.fromJSDate(date, {
+    zone: JOB_TIMEZONE,
+  }).toISODate();
+
+  if (!result) {
+    throw new Error("Unable to determine document expiry date");
+  }
+
   return result;
 };
 
 /**
- * Get the end of a calendar day.
+ * Create a half-open date range for a calendar day.
+ *
+ * The range includes the start and excludes the next day's start.
  */
-const endOfDay = (date = new Date()) => {
-  const result = new Date(date);
-  result.setHours(23, 59, 59, 999);
-  return result;
+const getDayRange = (date, daysFromToday = 0) => {
+  const start = getStartOfDayAfter(date, daysFromToday);
+  const end = getStartOfDayAfter(date, daysFromToday + 1);
+
+  return { start, end };
 };
+
+// ============================================================
+// NOTIFICATION HELPER
+// ============================================================
 
 /**
  * Create an automated document-expiry notification.
@@ -59,45 +122,70 @@ const notifyDocumentExpiry = async ({
   });
 };
 
+// ============================================================
+// MAIN DOCUMENT EXPIRY JOB
+// ============================================================
+
 /**
  * Process document expiry notifications.
  *
- * This function is intentionally exported separately so it can be
- * executed manually during testing before being connected to cron.
+ * 1. Mark overdue documents as EXPIRED after notification handling.
+ * 2. Notify owners about documents expiring today.
+ * 3. Notify owners about documents expiring tomorrow.
+ * 4. Notify owners about documents expiring in 7 days.
+ * 5. Notify owners about documents expiring in 30 days.
  */
 const runDocumentExpiryJob = async () => {
   const now = new Date();
 
-  const todayStart = startOfDay(now);
-  const todayEnd = endOfDay(now);
-
-  const tomorrowStart = new Date(todayStart.getTime() + DAY_MS);
-  const tomorrowEnd = endOfDay(tomorrowStart);
-
-  const sevenDaysStart = new Date(todayStart.getTime() + 7 * DAY_MS);
-  const sevenDaysEnd = endOfDay(sevenDaysStart);
-
-  const thirtyDaysStart = new Date(todayStart.getTime() + 30 * DAY_MS);
-  const thirtyDaysEnd = endOfDay(thirtyDaysStart);
+  const todayRange = getDayRange(now, 0);
+  const tomorrowRange = getDayRange(now, 1);
+  const sevenDaysRange = getDayRange(now, 7);
+  const thirtyDaysRange = getDayRange(now, 30);
 
   let processed = 0;
   let notificationsCreated = 0;
   let expiredDocuments = 0;
 
-  // ============================================================
-  // 1. MARK EXPIRED DOCUMENTS
-  // ============================================================
+  // ==========================================================
+  // 1. MARK OVERDUE DOCUMENTS AS EXPIRED
+  // ==========================================================
 
   const expiredDocumentsList = await Document.find({
     isActive: true,
     status: "ACTIVE",
     expiryDate: {
-      $lt: todayStart,
+      $lt: todayRange.start,
     },
   }).select("_id owner property title category expiryDate");
 
   for (const document of expiredDocumentsList) {
-    await Document.updateOne(
+    processed += 1;
+
+    // Attempt notification creation before changing document status.
+    const notification = await notifyDocumentExpiry({
+      document,
+      daysUntilExpiry: 0,
+      priority: "URGENT",
+      title: "Document Expired",
+      message: `The document "${document.title}" has expired.`,
+      eventKey: `DOCUMENT_EXPIRED:${document._id}:${getExpiryDateKey(
+        document.expiryDate,
+      )}`,
+    });
+
+    // If notification creation fails, leave the document ACTIVE
+    // so the next scheduled run can retry.
+    if (!notification) {
+      continue;
+    }
+
+    if (notification.created) {
+      notificationsCreated += 1;
+    }
+
+    // Mark the document as expired only if it is still ACTIVE.
+    const updateResult = await Document.updateOne(
       {
         _id: document._id,
         isActive: true,
@@ -110,33 +198,21 @@ const runDocumentExpiryJob = async () => {
       },
     );
 
-    expiredDocuments += 1;
-    processed += 1;
-
-    const notification = await notifyDocumentExpiry({
-      document,
-      daysUntilExpiry: 0,
-      priority: "URGENT",
-      title: "Document Expired",
-      message: `The document "${document.title}" has expired.`,
-      eventKey: `DOCUMENT_EXPIRED:${document._id}`,
-    });
-
-    if (notification?.created) {
-      notificationsCreated += 1;
+    if (updateResult.modifiedCount > 0) {
+      expiredDocuments += 1;
     }
   }
 
-  // ============================================================
-  // 2. EXPIRING TODAY
-  // ============================================================
+  // ==========================================================
+  // 2. DOCUMENTS EXPIRING TODAY
+  // ==========================================================
 
   const expiringToday = await Document.find({
     isActive: true,
     status: "ACTIVE",
     expiryDate: {
-      $gte: todayStart,
-      $lte: todayEnd,
+      $gte: todayRange.start,
+      $lt: todayRange.end,
     },
   }).select("_id owner property title category expiryDate");
 
@@ -149,7 +225,9 @@ const runDocumentExpiryJob = async () => {
       priority: "URGENT",
       title: "Document Expires Today",
       message: `The document "${document.title}" expires today.`,
-      eventKey: `DOCUMENT_EXPIRY:${document._id}:0`,
+      eventKey: `DOCUMENT_EXPIRY:${document._id}:${getExpiryDateKey(
+        document.expiryDate,
+      )}:0`,
     });
 
     if (notification?.created) {
@@ -157,16 +235,16 @@ const runDocumentExpiryJob = async () => {
     }
   }
 
-  // ============================================================
-  // 3. EXPIRING TOMORROW
-  // ============================================================
+  // ==========================================================
+  // 3. DOCUMENTS EXPIRING TOMORROW
+  // ==========================================================
 
   const expiringTomorrow = await Document.find({
     isActive: true,
     status: "ACTIVE",
     expiryDate: {
-      $gte: tomorrowStart,
-      $lte: tomorrowEnd,
+      $gte: tomorrowRange.start,
+      $lt: tomorrowRange.end,
     },
   }).select("_id owner property title category expiryDate");
 
@@ -179,7 +257,9 @@ const runDocumentExpiryJob = async () => {
       priority: "URGENT",
       title: "Document Expires Tomorrow",
       message: `The document "${document.title}" expires tomorrow.`,
-      eventKey: `DOCUMENT_EXPIRY:${document._id}:1`,
+      eventKey: `DOCUMENT_EXPIRY:${document._id}:${getExpiryDateKey(
+        document.expiryDate,
+      )}:1`,
     });
 
     if (notification?.created) {
@@ -187,16 +267,16 @@ const runDocumentExpiryJob = async () => {
     }
   }
 
-  // ============================================================
-  // 4. EXPIRING IN 7 DAYS
-  // ============================================================
+  // ==========================================================
+  // 4. DOCUMENTS EXPIRING IN 7 DAYS
+  // ==========================================================
 
   const expiringInSevenDays = await Document.find({
     isActive: true,
     status: "ACTIVE",
     expiryDate: {
-      $gte: sevenDaysStart,
-      $lte: sevenDaysEnd,
+      $gte: sevenDaysRange.start,
+      $lt: sevenDaysRange.end,
     },
   }).select("_id owner property title category expiryDate");
 
@@ -209,7 +289,9 @@ const runDocumentExpiryJob = async () => {
       priority: "HIGH",
       title: "Document Expires in 7 Days",
       message: `The document "${document.title}" will expire in 7 days.`,
-      eventKey: `DOCUMENT_EXPIRY:${document._id}:7`,
+      eventKey: `DOCUMENT_EXPIRY:${document._id}:${getExpiryDateKey(
+        document.expiryDate,
+      )}:7`,
     });
 
     if (notification?.created) {
@@ -217,16 +299,16 @@ const runDocumentExpiryJob = async () => {
     }
   }
 
-  // ============================================================
-  // 5. EXPIRING IN 30 DAYS
-  // ============================================================
+  // ==========================================================
+  // 5. DOCUMENTS EXPIRING IN 30 DAYS
+  // ==========================================================
 
   const expiringInThirtyDays = await Document.find({
     isActive: true,
     status: "ACTIVE",
     expiryDate: {
-      $gte: thirtyDaysStart,
-      $lte: thirtyDaysEnd,
+      $gte: thirtyDaysRange.start,
+      $lt: thirtyDaysRange.end,
     },
   }).select("_id owner property title category expiryDate");
 
@@ -239,13 +321,19 @@ const runDocumentExpiryJob = async () => {
       priority: "MEDIUM",
       title: "Document Expires in 30 Days",
       message: `The document "${document.title}" will expire in 30 days.`,
-      eventKey: `DOCUMENT_EXPIRY:${document._id}:30`,
+      eventKey: `DOCUMENT_EXPIRY:${document._id}:${getExpiryDateKey(
+        document.expiryDate,
+      )}:30`,
     });
 
     if (notification?.created) {
       notificationsCreated += 1;
     }
   }
+
+  // ==========================================================
+  // RETURN JOB SUMMARY
+  // ==========================================================
 
   return {
     processed,
@@ -254,6 +342,10 @@ const runDocumentExpiryJob = async () => {
     executedAt: now,
   };
 };
+
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
   runDocumentExpiryJob,
