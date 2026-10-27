@@ -123,6 +123,7 @@ function getExpenses(result) {
 let ownerToken;
 let otherOwnerToken;
 let adminToken;
+let caretakerToken;
 
 let ownerPropertyId;
 let otherOwnerPropertyId;
@@ -180,6 +181,29 @@ test("authenticate expense test users", async () => {
   if (ADMIN_EMAIL && ADMIN_PASSWORD) {
     adminToken = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
   }
+
+  const caretakerPassword = "Caretaker@Test123";
+
+  const caretakerPayload = {
+    name: `Expense Test Caretaker ${randomUUID().slice(0, 8)}`,
+    email: `expense.caretaker.${randomUUID()}@example.com`,
+    password: caretakerPassword,
+    phone: "9876543210",
+  };
+
+  const caretakerResult = await request("/api/caretakers/create", {
+    method: "POST",
+    headers: auth(ownerToken),
+    body: JSON.stringify(caretakerPayload),
+  });
+
+  assert.equal(
+    caretakerResult.status,
+    201,
+    `Caretaker creation failed: ${JSON.stringify(caretakerResult.body)}`,
+  );
+
+  caretakerToken = await login(caretakerPayload.email, caretakerPassword);
 });
 
 test("expense endpoints reject unauthenticated requests", async () => {
@@ -566,21 +590,10 @@ test("admin can manage expenses across property owners", async (t) => {
   assert.equal(deleteResult.status, 200, JSON.stringify(deleteResult.body));
 });
 
-test("caretaker role is forbidden from owner/admin expense endpoints", async (t) => {
-  const caretakerEmail = process.env.TEST_CARETAKER_EMAIL;
-  const caretakerPassword = process.env.TEST_CARETAKER_PASSWORD;
-
-  if (!caretakerEmail || !caretakerPassword) {
-    t.skip(
-      "Set TEST_CARETAKER_EMAIL and TEST_CARETAKER_PASSWORD to an existing test caretaker account",
-    );
-    return;
-  }
-
-  const caretakerToken = await login(caretakerEmail, caretakerPassword);
+test("caretaker role is forbidden from owner/admin expense endpoints", async () => {
+  assert.ok(caretakerToken, "Caretaker token should be available");
 
   for (const path of [
-    "/api/expenses",
     "/api/expenses/my",
     "/api/expenses/stats",
   ]) {

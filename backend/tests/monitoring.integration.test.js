@@ -12,9 +12,6 @@ const OTHER_OWNER_EMAIL =
 const OTHER_OWNER_PASSWORD =
   process.env.TEST_OTHER_OWNER_PASSWORD || "OtherOwner@123";
 
-const CARETAKER_EMAIL = process.env.TEST_CARETAKER_EMAIL;
-const CARETAKER_PASSWORD = process.env.TEST_CARETAKER_PASSWORD;
-
 const request = async (path, options = {}) => {
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
@@ -105,6 +102,7 @@ const eventPayload = (propertyId, overrides = {}) => ({
 
 let ownerToken;
 let otherOwnerToken;
+let caretakerToken;
 let ownerPropertyId;
 let otherOwnerPropertyId;
 let createdEventId;
@@ -118,6 +116,31 @@ test("authenticate monitoring test owners and create test properties", async () 
   ownerPropertyId = await createProperty(ownerToken);
 
   otherOwnerPropertyId = await createProperty(otherOwnerToken);
+
+  const caretakerPassword = "Caretaker@Test123";
+
+  const caretakerPayload = {
+    name: `Monitoring Test Caretaker ${randomUUID().slice(0, 8)}`,
+    email: `monitoring.caretaker.${randomUUID()}@example.com`,
+    password: caretakerPassword,
+    phone: "9876543210",
+  };
+
+  const caretakerResult = await request("/api/caretakers/create", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ownerToken}`,
+    },
+    body: JSON.stringify(caretakerPayload),
+  });
+
+  assert.equal(
+    caretakerResult.status,
+    201,
+    `Caretaker creation failed: ${JSON.stringify(caretakerResult.body)}`,
+  );
+
+  caretakerToken = await login(caretakerPayload.email, caretakerPassword);
 });
 
 test("monitoring endpoints reject unauthenticated requests", async () => {
@@ -505,21 +528,15 @@ test("acknowledge and resolve reject invalid event IDs", async () => {
   }
 });
 
-test(
-  "caretaker cannot access owner-only monitoring routes",
-  {
-    skip: !CARETAKER_EMAIL || !CARETAKER_PASSWORD,
-  },
-  async () => {
-    const caretakerToken = await login(CARETAKER_EMAIL, CARETAKER_PASSWORD);
+test("caretaker cannot access owner-only monitoring routes", async () => {
+  assert.ok(caretakerToken, "Caretaker token should be available");
 
-    const result = await request("/api/monitoring/my", {
-      headers: {
-        Authorization: `Bearer ${caretakerToken}`,
-      },
-    });
+  const result = await request("/api/monitoring/my", {
+    headers: {
+      Authorization: `Bearer ${caretakerToken}`,
+    },
+  });
 
-    assert.equal(result.status, 403, JSON.stringify(result.body));
-    assert.equal(result.body.success, false);
-  },
-);
+  assert.equal(result.status, 403, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
