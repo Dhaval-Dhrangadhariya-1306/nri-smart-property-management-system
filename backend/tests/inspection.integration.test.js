@@ -230,6 +230,104 @@ test("inspection creation rejects a future inspection date", async () => {
   assert.equal(result.status, 400, JSON.stringify(result.body));
 });
 
+test("inspection creation rejects a missing security status", async () => {
+  const payload = inspectionPayload(propertyId);
+  delete payload.securityStatus;
+
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify(payload),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("inspection creation rejects an empty issue description", async () => {
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      ...inspectionPayload(propertyId),
+      issuesFound: ["   "],
+    }),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("inspection creation rejects an issue description exceeding 500 characters", async () => {
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      ...inspectionPayload(propertyId),
+      issuesFound: ["A".repeat(501)],
+    }),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("inspection creation rejects notes exceeding 2000 characters", async () => {
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      ...inspectionPayload(propertyId),
+      notes: "A".repeat(2001),
+    }),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("inspection creation rejects a non-string notes value", async () => {
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      ...inspectionPayload(propertyId),
+      notes: 12345,
+    }),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("inspection creation rejects an empty image path", async () => {
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      ...inspectionPayload(propertyId),
+      images: ["   "],
+    }),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("inspection creation rejects an image path exceeding 2000 characters", async () => {
+  const result = await request("/api/inspections", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      ...inspectionPayload(propertyId),
+      images: ["A".repeat(2001)],
+    }),
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
 test("caretaker cannot inspect a property without an active assignment", async () => {
   const result = await request("/api/inspections", {
     method: "POST",

@@ -16,36 +16,125 @@ const createError = (message, statusCode = 400) => {
   return error;
 };
 
-const isValidObjectId = (id) => {
-  return mongoose.Types.ObjectId.isValid(id);
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const isAdmin = (req) => req.user.role === "ADMIN";
+
+// Owners can access only their own expenses.
+// Admins can access all active expenses.
+const getExpenseAccessFilter = (req) => ({
+  isActive: true,
+  ...(isAdmin(req) ? {} : { owner: req.user.userId }),
+});
+
+// Owners can access their own active properties.
+// Admins can access any active property.
+const getPropertyAccessFilter = (req, propertyId) => ({
+  _id: propertyId,
+  isActive: true,
+  status: "ACTIVE",
+  ...(isAdmin(req) ? {} : { owner: req.user.userId }),
+});
+
+const validateOptionalString = (value, fieldName, maxLength = 2000) => {
+  if (value === undefined || value === null) return;
+
+  if (typeof value !== "string") {
+    throw createError(`${fieldName} must be a string`);
+  }
+
+  if (value.length > maxLength) {
+    throw createError(`${fieldName} cannot exceed ${maxLength} characters`);
+  }
 };
 
-// ============================================================
-// AUDIT SNAPSHOT HELPER
-// ============================================================
+const EXPENSE_CATEGORIES = [
+  "MAINTENANCE",
+  "ELECTRICITY",
+  "WATER",
+  "PROPERTY_TAX",
+  "INSURANCE",
+  "SECURITY",
+  "CLEANING",
+  "REPAIR",
+  "RENOVATION",
+  "LEGAL",
+  "UTILITY",
+  "OTHER",
+];
 
-const getExpenseAuditValues = (expense) => {
-  return {
-    property: expense.property || null,
-    owner: expense.owner || null,
-    maintenanceRequest: expense.maintenanceRequest || null,
-    inspection: expense.inspection || null,
+const PAYMENT_STATUSES = ["PENDING", "PAID", "PARTIALLY_PAID", "CANCELLED"];
 
-    title: expense.title,
-    description: expense.description,
-    category: expense.category,
-    amount: expense.amount,
-    expenseDate: expense.expenseDate,
+const PAID_BY_VALUES = ["OWNER", "CARETAKER", "ADMIN", "OTHER"];
 
-    paymentStatus: expense.paymentStatus,
-    paidBy: expense.paidBy,
-    paymentMethod: expense.paymentMethod,
+const PAYMENT_METHODS = [
+  "CASH",
+  "BANK_TRANSFER",
+  "UPI",
+  "CARD",
+  "CHEQUE",
+  "OTHER",
+];
 
-    receiptUrl: expense.receiptUrl,
-    notes: expense.notes,
-    isActive: expense.isActive,
-  };
+const validateEnum = (value, allowedValues, fieldName) => {
+  if (value !== undefined && !allowedValues.includes(value)) {
+    throw createError(`Invalid ${fieldName}`);
+  }
 };
+
+const validateAmount = (value) => {
+  if (value === undefined || value === null || value === "") {
+    throw createError("Expense amount is required");
+  }
+
+  const amount = Number(value);
+
+  if (!Number.isFinite(amount)) {
+    throw createError("Expense amount must be a valid number");
+  }
+
+  if (amount < 0) {
+    throw createError("Expense amount cannot be negative");
+  }
+
+  return amount;
+};
+
+const validateExpenseDate = (value) => {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw createError("Expense date must be a valid date");
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    throw createError("Expense date must be a valid date");
+  }
+
+  if (date > new Date()) {
+    throw createError("Expense date cannot be in the future");
+  }
+
+  return date;
+};
+
+const getExpenseAuditValues = (expense) => ({
+  property: expense.property || null,
+  owner: expense.owner || null,
+  maintenanceRequest: expense.maintenanceRequest || null,
+  inspection: expense.inspection || null,
+  title: expense.title,
+  description: expense.description,
+  category: expense.category,
+  amount: expense.amount,
+  expenseDate: expense.expenseDate,
+  paymentStatus: expense.paymentStatus,
+  paidBy: expense.paidBy,
+  paymentMethod: expense.paymentMethod,
+  receiptUrl: expense.receiptUrl,
+  notes: expense.notes,
+  isActive: expense.isActive,
+});
 
 // ============================================================
 // CREATE EXPENSE
@@ -69,10 +158,6 @@ const createExpense = async (req, res, next) => {
       notes,
     } = req.body;
 
-    // --------------------------------------------------------
-    // BASIC VALIDATION
-    // --------------------------------------------------------
-
     if (!propertyId) {
       throw createError("Property ID is required");
     }
@@ -81,66 +166,44 @@ const createExpense = async (req, res, next) => {
       throw createError("Invalid property ID");
     }
 
-    if (!title || typeof title !== "string") {
+    if (typeof title !== "string") {
       throw createError("Expense title is required");
     }
 
-    if (title.trim().length < 3) {
+    const cleanTitle = title.trim();
+
+    if (cleanTitle.length < 3) {
       throw createError("Expense title must be at least 3 characters");
     }
 
-    if (title.trim().length > 150) {
+    if (cleanTitle.length > 150) {
       throw createError("Expense title cannot exceed 150 characters");
     }
+
+    validateEnum(category, EXPENSE_CATEGORIES, "expense category");
 
     if (!category) {
       throw createError("Expense category is required");
     }
 
-    if (amount === undefined || amount === null || amount === "") {
-      throw createError("Expense amount is required");
-    }
+    validateEnum(paymentStatus, PAYMENT_STATUSES, "payment status");
+    validateEnum(paidBy, PAID_BY_VALUES, "paid-by value");
+    validateEnum(paymentMethod, PAYMENT_METHODS, "payment method");
 
-    const numericAmount = Number(amount);
+    const numericAmount = validateAmount(amount);
 
-    if (!Number.isFinite(numericAmount)) {
-      throw createError("Expense amount must be a valid number");
-    }
+    const parsedExpenseDate =
+      expenseDate === undefined || expenseDate === null || expenseDate === ""
+        ? new Date()
+        : validateExpenseDate(expenseDate);
 
-    if (numericAmount < 0) {
-      throw createError("Expense amount cannot be negative");
-    }
+    validateOptionalString(description, "Description");
+    validateOptionalString(notes, "Notes");
+    validateOptionalString(receiptUrl, "Receipt URL");
 
-    // --------------------------------------------------------
-    // EXPENSE DATE
-    // --------------------------------------------------------
-
-    let parsedExpenseDate;
-
-    if (expenseDate) {
-      parsedExpenseDate = new Date(expenseDate);
-
-      if (Number.isNaN(parsedExpenseDate.getTime())) {
-        throw createError("Invalid expense date");
-      }
-
-      if (parsedExpenseDate > new Date()) {
-        throw createError("Expense date cannot be in the future");
-      }
-    } else {
-      parsedExpenseDate = new Date();
-    }
-
-    // --------------------------------------------------------
-    // VALIDATE PROPERTY OWNERSHIP
-    // --------------------------------------------------------
-
-    const property = await Property.findOne({
-      _id: propertyId,
-      owner: req.user.userId,
-      isActive: true,
-      status: "ACTIVE",
-    });
+    const property = await Property.findOne(
+      getPropertyAccessFilter(req, propertyId),
+    );
 
     if (!property) {
       throw createError(
@@ -148,10 +211,6 @@ const createExpense = async (req, res, next) => {
         404,
       );
     }
-
-    // --------------------------------------------------------
-    // OPTIONAL MAINTENANCE REQUEST
-    // --------------------------------------------------------
 
     let maintenanceRequest = null;
 
@@ -162,7 +221,7 @@ const createExpense = async (req, res, next) => {
 
       maintenanceRequest = await MaintenanceRequest.findOne({
         _id: maintenanceRequestId,
-        property: propertyId,
+        property: property._id,
       });
 
       if (!maintenanceRequest) {
@@ -173,10 +232,6 @@ const createExpense = async (req, res, next) => {
       }
     }
 
-    // --------------------------------------------------------
-    // OPTIONAL INSPECTION
-    // --------------------------------------------------------
-
     let inspection = null;
 
     if (inspectionId) {
@@ -186,7 +241,7 @@ const createExpense = async (req, res, next) => {
 
       inspection = await Inspection.findOne({
         _id: inspectionId,
-        property: propertyId,
+        property: property._id,
       });
 
       if (!inspection) {
@@ -197,50 +252,14 @@ const createExpense = async (req, res, next) => {
       }
     }
 
-    // --------------------------------------------------------
-    // VALIDATE STRING FIELDS
-    // --------------------------------------------------------
-
-    if (description !== undefined && description !== null) {
-      if (typeof description !== "string") {
-        throw createError("Description must be a string");
-      }
-
-      if (description.length > 2000) {
-        throw createError("Description cannot exceed 2000 characters");
-      }
-    }
-
-    if (notes !== undefined && notes !== null) {
-      if (typeof notes !== "string") {
-        throw createError("Notes must be a string");
-      }
-
-      if (notes.length > 2000) {
-        throw createError("Notes cannot exceed 2000 characters");
-      }
-    }
-
-    if (receiptUrl !== undefined && receiptUrl !== null) {
-      if (typeof receiptUrl !== "string") {
-        throw createError("Receipt URL must be a string");
-      }
-
-      if (receiptUrl.length > 2000) {
-        throw createError("Receipt URL cannot exceed 2000 characters");
-      }
-    }
-
-    // --------------------------------------------------------
-    // CREATE EXPENSE
-    // --------------------------------------------------------
-
+    // Always record the actual property owner, even if an admin
+    // creates the expense.
     const expense = await Expense.create({
-      property: propertyId,
-      owner: req.user.userId,
+      property: property._id,
+      owner: property.owner,
       maintenanceRequest: maintenanceRequest ? maintenanceRequest._id : null,
       inspection: inspection ? inspection._id : null,
-      title: title.trim(),
+      title: cleanTitle,
       description: typeof description === "string" ? description.trim() : "",
       category,
       amount: numericAmount,
@@ -252,10 +271,6 @@ const createExpense = async (req, res, next) => {
       notes: typeof notes === "string" ? notes.trim() : "",
     });
 
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
-
     await createAuditLog({
       req,
       action: "EXPENSE_CREATED",
@@ -265,10 +280,6 @@ const createExpense = async (req, res, next) => {
       description: `Expense "${expense.title}" was created for property "${property.title}".`,
       newValues: getExpenseAuditValues(expense),
     });
-
-    // --------------------------------------------------------
-    // POPULATE RESPONSE
-    // --------------------------------------------------------
 
     const populatedExpense = await Expense.findById(expense._id)
       .populate("property", "title propertyType address")
@@ -293,14 +304,13 @@ const createExpense = async (req, res, next) => {
 
 // ============================================================
 // GET MY EXPENSES
+// Admin: all active expenses.
+// Owner: only their own active expenses.
 // ============================================================
 
 const getMyExpenses = async (req, res, next) => {
   try {
-    const expenses = await Expense.find({
-      owner: req.user.userId,
-      isActive: true,
-    })
+    const expenses = await Expense.find(getExpenseAccessFilter(req))
       .populate("property", "title propertyType address")
       .populate(
         "maintenanceRequest",
@@ -320,7 +330,7 @@ const getMyExpenses = async (req, res, next) => {
 };
 
 // ============================================================
-// GET PROPERTY EXPENSES
+// GET EXPENSES FOR A PROPERTY
 // ============================================================
 
 const getPropertyExpenses = async (req, res, next) => {
@@ -331,16 +341,9 @@ const getPropertyExpenses = async (req, res, next) => {
       throw createError("Invalid property ID");
     }
 
-    // --------------------------------------------------------
-    // VERIFY PROPERTY OWNERSHIP
-    // --------------------------------------------------------
-
-    const property = await Property.findOne({
-      _id: propertyId,
-      owner: req.user.userId,
-      isActive: true,
-      status: "ACTIVE",
-    });
+    const property = await Property.findOne(
+      getPropertyAccessFilter(req, propertyId),
+    );
 
     if (!property) {
       throw createError(
@@ -350,8 +353,7 @@ const getPropertyExpenses = async (req, res, next) => {
     }
 
     const expenses = await Expense.find({
-      property: propertyId,
-      owner: req.user.userId,
+      property: property._id,
       isActive: true,
     })
       .populate("property", "title propertyType address")
@@ -386,8 +388,7 @@ const getExpenseById = async (req, res, next) => {
 
     const expense = await Expense.findOne({
       _id: expenseId,
-      owner: req.user.userId,
-      isActive: true,
+      ...getExpenseAccessFilter(req),
     })
       .populate("property", "title propertyType address")
       .populate(
@@ -419,6 +420,10 @@ const getExpenseById = async (req, res, next) => {
 // UPDATE EXPENSE
 // ============================================================
 
+// ============================================================
+// UPDATE EXPENSE
+// ============================================================
+
 const updateExpense = async (req, res, next) => {
   try {
     const { expenseId } = req.params;
@@ -429,8 +434,7 @@ const updateExpense = async (req, res, next) => {
 
     const expense = await Expense.findOne({
       _id: expenseId,
-      owner: req.user.userId,
-      isActive: true,
+      ...getExpenseAccessFilter(req),
     });
 
     if (!expense) {
@@ -440,15 +444,8 @@ const updateExpense = async (req, res, next) => {
       );
     }
 
-    // --------------------------------------------------------
-    // CAPTURE OLD VALUES BEFORE UPDATE
-    // --------------------------------------------------------
-
     const oldValues = getExpenseAuditValues(expense);
-
-    // --------------------------------------------------------
-    // ALLOWED FIELDS
-    // --------------------------------------------------------
+    const body = req.body || {};
 
     const allowedFields = [
       "title",
@@ -463,93 +460,123 @@ const updateExpense = async (req, res, next) => {
       "notes",
     ];
 
-    // --------------------------------------------------------
-    // UPDATE ONLY ALLOWED FIELDS
-    // --------------------------------------------------------
+    // Reject unsupported fields.
+    const unsupportedFields = Object.keys(body).filter(
+      (field) => !allowedFields.includes(field),
+    );
 
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        expense[field] = req.body[field];
-      }
+    if (unsupportedFields.length > 0) {
+      throw createError(
+        `Unsupported expense field(s): ${unsupportedFields.join(", ")}`,
+      );
     }
 
-    // --------------------------------------------------------
-    // VALIDATE AMOUNT
-    // --------------------------------------------------------
+    // Validate all provided values before modifying the document.
+    validateOptionalString(body.title, "Expense title", 150);
+    validateOptionalString(body.description, "Description");
+    validateOptionalString(body.receiptUrl, "Receipt URL");
+    validateOptionalString(body.notes, "Notes");
 
-    if (req.body.amount !== undefined) {
-      const numericAmount = Number(req.body.amount);
-
-      if (!Number.isFinite(numericAmount)) {
-        throw createError("Expense amount must be a valid number");
+    if (body.title !== undefined) {
+      if (typeof body.title !== "string") {
+        throw createError("Expense title must be a string");
       }
 
-      if (numericAmount < 0) {
-        throw createError("Expense amount cannot be negative");
-      }
+      const cleanTitle = body.title.trim();
 
-      expense.amount = numericAmount;
-    }
-
-    // --------------------------------------------------------
-    // VALIDATE EXPENSE DATE
-    // --------------------------------------------------------
-
-    if (req.body.expenseDate !== undefined) {
-      const parsedDate = new Date(req.body.expenseDate);
-
-      if (Number.isNaN(parsedDate.getTime())) {
-        throw createError("Invalid expense date");
-      }
-
-      if (parsedDate > new Date()) {
-        throw createError("Expense date cannot be in the future");
-      }
-
-      expense.expenseDate = parsedDate;
-    }
-
-    // --------------------------------------------------------
-    // VALIDATE TITLE
-    // --------------------------------------------------------
-
-    if (expense.title) {
-      expense.title = expense.title.trim();
-
-      if (expense.title.length < 3) {
+      if (cleanTitle.length < 3) {
         throw createError("Expense title must be at least 3 characters");
       }
 
-      if (expense.title.length > 150) {
+      if (cleanTitle.length > 150) {
         throw createError("Expense title cannot exceed 150 characters");
       }
     }
 
-    // --------------------------------------------------------
-    // TRIM STRING FIELDS
-    // --------------------------------------------------------
+    if (body.category !== undefined) {
+      if (typeof body.category !== "string") {
+        throw createError("Invalid expense category");
+      }
 
-    if (typeof expense.description === "string") {
-      expense.description = expense.description.trim();
+      validateEnum(body.category, EXPENSE_CATEGORIES, "expense category");
     }
 
-    if (typeof expense.notes === "string") {
-      expense.notes = expense.notes.trim();
+    if (body.paymentStatus !== undefined) {
+      if (typeof body.paymentStatus !== "string") {
+        throw createError("Invalid payment status");
+      }
+
+      validateEnum(body.paymentStatus, PAYMENT_STATUSES, "payment status");
     }
 
-    if (typeof expense.receiptUrl === "string") {
-      expense.receiptUrl = expense.receiptUrl.trim();
+    if (body.paidBy !== undefined) {
+      if (typeof body.paidBy !== "string") {
+        throw createError("Invalid paid-by value");
+      }
+
+      validateEnum(body.paidBy, PAID_BY_VALUES, "paid-by value");
     }
 
-    // --------------------------------------------------------
-    // SAVE
-    // --------------------------------------------------------
+    if (body.paymentMethod !== undefined) {
+      if (typeof body.paymentMethod !== "string") {
+        throw createError("Invalid payment method");
+      }
+
+      validateEnum(body.paymentMethod, PAYMENT_METHODS, "payment method");
+    }
+
+    const validatedAmount =
+      body.amount !== undefined ? validateAmount(body.amount) : undefined;
+
+    const validatedDate =
+      body.expenseDate !== undefined
+        ? validateExpenseDate(body.expenseDate)
+        : undefined;
+
+    // All validation has passed. Apply changes now.
+    if (body.title !== undefined) {
+      expense.title = body.title.trim();
+    }
+
+    if (body.description !== undefined) {
+      expense.description =
+        body.description === null ? "" : body.description.trim();
+    }
+
+    if (body.category !== undefined) {
+      expense.category = body.category;
+    }
+
+    if (validatedAmount !== undefined) {
+      expense.amount = validatedAmount;
+    }
+
+    if (validatedDate !== undefined) {
+      expense.expenseDate = validatedDate;
+    }
+
+    if (body.paymentStatus !== undefined) {
+      expense.paymentStatus = body.paymentStatus;
+    }
+
+    if (body.paidBy !== undefined) {
+      expense.paidBy = body.paidBy;
+    }
+
+    if (body.paymentMethod !== undefined) {
+      expense.paymentMethod = body.paymentMethod;
+    }
+
+    if (body.receiptUrl !== undefined) {
+      expense.receiptUrl =
+        body.receiptUrl === null ? "" : body.receiptUrl.trim();
+    }
+
+    if (body.notes !== undefined) {
+      expense.notes = body.notes === null ? "" : body.notes.trim();
+    }
 
     await expense.save();
-
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
 
     await createAuditLog({
       req,
@@ -562,10 +589,6 @@ const updateExpense = async (req, res, next) => {
       newValues: getExpenseAuditValues(expense),
     });
 
-    // --------------------------------------------------------
-    // POPULATE RESPONSE
-    // --------------------------------------------------------
-
     const updatedExpense = await Expense.findById(expense._id)
       .populate("property", "title propertyType address")
       .populate(
@@ -574,7 +597,7 @@ const updateExpense = async (req, res, next) => {
       )
       .populate("inspection", "overallCondition inspectedAt");
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Expense updated successfully",
       data: updatedExpense,
@@ -598,8 +621,7 @@ const deleteExpense = async (req, res, next) => {
 
     const expense = await Expense.findOne({
       _id: expenseId,
-      owner: req.user.userId,
-      isActive: true,
+      ...getExpenseAccessFilter(req),
     });
 
     if (!expense) {
@@ -609,23 +631,10 @@ const deleteExpense = async (req, res, next) => {
       );
     }
 
-    // --------------------------------------------------------
-    // CAPTURE OLD VALUES
-    // --------------------------------------------------------
-
     const oldValues = getExpenseAuditValues(expense);
 
-    // --------------------------------------------------------
-    // SOFT DELETE
-    // --------------------------------------------------------
-
     expense.isActive = false;
-
     await expense.save();
-
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
 
     await createAuditLog({
       req,
@@ -649,6 +658,8 @@ const deleteExpense = async (req, res, next) => {
 
 // ============================================================
 // EXPENSE STATISTICS
+// Admin: platform-wide statistics.
+// Owner: statistics for their own expenses.
 // ============================================================
 
 const getExpenseStats = async (req, res, next) => {
@@ -656,25 +667,22 @@ const getExpenseStats = async (req, res, next) => {
     const { propertyId } = req.query;
 
     const match = {
-      owner: new mongoose.Types.ObjectId(req.user.userId),
       isActive: true,
+      ...(isAdmin(req)
+        ? {}
+        : {
+            owner: new mongoose.Types.ObjectId(req.user.userId),
+          }),
     };
-
-    // --------------------------------------------------------
-    // OPTIONAL PROPERTY FILTER
-    // --------------------------------------------------------
 
     if (propertyId) {
       if (!isValidObjectId(propertyId)) {
         throw createError("Invalid property ID");
       }
 
-      const property = await Property.findOne({
-        _id: propertyId,
-        owner: req.user.userId,
-        isActive: true,
-        status: "ACTIVE",
-      });
+      const property = await Property.findOne(
+        getPropertyAccessFilter(req, propertyId),
+      );
 
       if (!property) {
         throw createError(
@@ -686,14 +694,8 @@ const getExpenseStats = async (req, res, next) => {
       match.property = new mongoose.Types.ObjectId(propertyId);
     }
 
-    // --------------------------------------------------------
-    // TOTAL EXPENSE
-    // --------------------------------------------------------
-
     const totalResult = await Expense.aggregate([
-      {
-        $match: match,
-      },
+      { $match: match },
       {
         $group: {
           _id: null,
@@ -703,14 +705,8 @@ const getExpenseStats = async (req, res, next) => {
       },
     ]);
 
-    // --------------------------------------------------------
-    // BY CATEGORY
-    // --------------------------------------------------------
-
     const categoryStats = await Expense.aggregate([
-      {
-        $match: match,
-      },
+      { $match: match },
       {
         $group: {
           _id: "$category",
@@ -718,21 +714,11 @@ const getExpenseStats = async (req, res, next) => {
           count: { $sum: 1 },
         },
       },
-      {
-        $sort: {
-          totalAmount: -1,
-        },
-      },
+      { $sort: { totalAmount: -1 } },
     ]);
 
-    // --------------------------------------------------------
-    // BY PAYMENT STATUS
-    // --------------------------------------------------------
-
     const paymentStats = await Expense.aggregate([
-      {
-        $match: match,
-      },
+      { $match: match },
       {
         $group: {
           _id: "$paymentStatus",
@@ -740,11 +726,7 @@ const getExpenseStats = async (req, res, next) => {
           count: { $sum: 1 },
         },
       },
-      {
-        $sort: {
-          totalAmount: -1,
-        },
-      },
+      { $sort: { totalAmount: -1 } },
     ]);
 
     const total = totalResult[0] || {
