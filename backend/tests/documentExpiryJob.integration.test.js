@@ -175,7 +175,7 @@ test.after(async () => {
 
       await Notification.deleteMany({
         $or: [
-          { "metadata.documentId": { $in: ids } },
+          { "metadata.documentId": { $in: createdDocumentIds } },
           {
             "metadata.automationEventKey": {
               $regex: testId,
@@ -270,4 +270,82 @@ test("expiry job does not duplicate an overdue notification when rerun", async (
 
   const updatedDocument = await Document.findById(document._id).lean();
   assert.equal(updatedDocument.status, "EXPIRED");
+});
+
+test("expiry job retries notification creation after a failure", async () => {
+  const document = await createTestDocument("notification-retry", -1);
+
+  const persistedDocument = await Document.findById(document._id).lean();
+
+  const expiryDateKey = DateTime.fromJSDate(persistedDocument.expiryDate)
+    .setZone(TIMEZONE)
+    .toISODate();
+
+  const eventKey = `DOCUMENT_EXPIRED:${document._id}:${expiryDateKey}`;
+
+  const originalCreate = Notification.create;
+  let simulatedFailure = false;
+
+  Notification.create = async function (...args) {
+    const payload = args[0];
+
+    if (
+      !simulatedFailure &&
+      payload?.metadata?.automationEventKey === eventKey
+    ) {
+      simulatedFailure = true;
+
+      throw new Error("Simulated notification creation failure");
+    }
+
+    return originalCreate.apply(this, args);
+  };
+
+  try {
+    // First run: notification creation fails.
+    await runDocumentExpiryJob();
+
+    assert.equal(
+      simulatedFailure,
+      true,
+      "The test should simulate a notification creation failure",
+    );
+
+    const documentAfterFailure = await Document.findById(document._id).lean();
+
+    assert.equal(
+      documentAfterFailure.status,
+      "ACTIVE",
+      "Document must remain ACTIVE when notification creation fails",
+    );
+
+    let notifications = await findAutomationNotifications(document._id);
+
+    assert.equal(
+      notifications.length,
+      0,
+      "Failed notification creation must not leave a notification",
+    );
+
+    // Second run: notification creation should succeed.
+    await runDocumentExpiryJob();
+
+    const documentAfterRetry = await Document.findById(document._id).lean();
+
+    assert.equal(
+      documentAfterRetry.status,
+      "EXPIRED",
+      "Document should become EXPIRED after a successful retry",
+    );
+
+    notifications = await findAutomationNotifications(document._id);
+
+    assert.equal(
+      notifications.length,
+      1,
+      "Successful retry should create exactly one notification",
+    );
+  } finally {
+    Notification.create = originalCreate;
+  }
 });
