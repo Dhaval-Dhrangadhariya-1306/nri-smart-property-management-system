@@ -4,6 +4,13 @@ const helmet = require("helmet");
 require("dotenv").config();
 
 // ============================================================
+// SWAGGER / OPENAPI
+// ============================================================
+
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./config/swagger");
+
+// ============================================================
 // ROUTES
 // ============================================================
 
@@ -21,22 +28,21 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
 const auditLogRoutes = require("./routes/auditLogRoutes");
 
-
 // ============================================================
-// MIDDLEWARE
+// ERROR-HANDLING MIDDLEWARE
 // ============================================================
 
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
 
 // ============================================================
-// APP
+// INITIALIZE EXPRESS APP
 // ============================================================
 
 const app = express();
 
 // ============================================================
-// CORS
+// SECURITY AND CORS
 // ============================================================
 
 const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
@@ -74,6 +80,18 @@ app.get("/", (req, res) => {
 });
 
 // ============================================================
+// SWAGGER API DOCUMENTATION
+// Register before the not-found and error handlers.
+// ============================================================
+
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// Serve the generated OpenAPI specification as JSON.
+app.get("/api-docs.json", (req, res) => {
+  res.status(200).json(swaggerSpec);
+});
+
+// ============================================================
 // API ROUTES
 // ============================================================
 
@@ -99,17 +117,21 @@ app.use("/api/notifications", notificationRoutes);
 
 app.use("/api/vendors", vendorRoutes);
 
-// Audit logs
 app.use("/api/audit-logs", auditLogRoutes);
 
 app.use("/api/dashboard", dashboardRoutes);
 
 // ============================================================
 // ERROR HANDLING
+// Keep these last so unmatched requests and errors are handled.
 // ============================================================
 
 app.use(notFound);
 
 app.use(errorHandler);
+
+// ============================================================
+// EXPORT APP
+// ============================================================
 
 module.exports = app;
