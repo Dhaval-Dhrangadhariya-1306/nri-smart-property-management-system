@@ -50,3 +50,6 @@ uploads/
 # Generated documentation/build files
 .cache-loader/
 
+
+# Local authentication test token
+backend/.auth-test-token
