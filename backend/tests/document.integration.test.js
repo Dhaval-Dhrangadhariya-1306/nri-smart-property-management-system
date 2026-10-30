@@ -1,6 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const documentStorage = require("../src/services/documentStorage");
+
+const STORAGE_DIRECTORY =
+  documentStorage.STORAGE_DIRECTORY ||
+  path.resolve(__dirname, "../uploads/documents");
 
 const BASE_URL = process.env.TEST_BASE_URL || "http://localhost:5001";
 
@@ -17,12 +24,17 @@ const OTHER_OWNER_PASSWORD =
 // ============================================================
 
 const request = async (path, options = {}) => {
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
+
+  const headers = {
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
+    ...(options.headers || {}),
+  };
+
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
+    headers,
   });
 
   let body = null;
@@ -36,6 +48,7 @@ const request = async (path, options = {}) => {
   return {
     status: response.status,
     body,
+    response,
   };
 };
 
@@ -115,12 +128,12 @@ let propertyId;
 let otherOwnerPropertyId;
 let documentId;
 
+let uploadedDocumentId;
+let uploadedPdfBuffer;
+
 // ============================================================
 // ENSURE SECOND OWNER PROPERTY EXISTS
 // ============================================================
-
-// This helper makes tests independent of the property-setup test.
-// If the property has not been created, it creates one on demand.
 
 const ensureOtherOwnerProperty = async () => {
   if (otherOwnerPropertyId) {
@@ -202,6 +215,255 @@ test("create a property for the document owner", async () => {
 
 test("create a property for the second owner", async () => {
   await ensureOtherOwnerProperty();
+});
+
+// ============================================================
+// FILE UPLOAD AND DOWNLOAD TESTS
+// ============================================================
+
+test("owner can upload a valid PDF to their own property", async () => {
+  assert.ok(propertyId, "Owner property must exist before uploading");
+
+  // Minimal PDF signature and content for file-type validation.
+  uploadedPdfBuffer = Buffer.from(
+    "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n",
+    "utf8",
+  );
+
+  const form = new FormData();
+
+  form.append("propertyId", propertyId);
+  form.append("title", `Uploaded Test Document ${randomUUID().slice(0, 8)}`);
+  form.append("category", "PROPERTY_DEED");
+  form.append("description", "Uploaded by document integration tests");
+  form.append("isSensitive", "false");
+
+  form.append(
+    "file",
+    new Blob([uploadedPdfBuffer], { type: "application/pdf" }),
+    "integration-test.pdf",
+  );
+
+  const result = await request("/api/documents/upload", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ownerToken}`,
+    },
+    body: form,
+  });
+
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  assert.equal(result.body.success, true);
+
+  const document = result.body.document || result.body.data?.document;
+
+  assert.ok(document, "Uploaded document must be returned");
+
+  uploadedDocumentId = document._id;
+
+  assert.ok(uploadedDocumentId, "Uploaded document ID must exist");
+  assert.equal(document.originalFileName, "integration-test.pdf");
+  assert.equal(document.fileType, "PDF");
+  assert.equal(document.fileSize, uploadedPdfBuffer.length);
+  assert.ok(document.storageKey, "Storage key must exist");
+  assert.equal(document.storageProvider, "LOCAL");
+});
+
+test("owner can download their uploaded PDF", async () => {
+  assert.ok(uploadedDocumentId, "Upload a document before testing download");
+
+  const response = await fetch(
+    `${BASE_URL}/api/documents/${uploadedDocumentId}/download`,
+    {
+      headers: {
+        Authorization: `Bearer ${ownerToken}`,
+      },
+    },
+  );
+
+  assert.equal(
+    response.status,
+    200,
+    `Download failed with status ${response.status}`,
+  );
+
+  const downloadedBuffer = Buffer.from(await response.arrayBuffer());
+
+  assert.deepEqual(
+    downloadedBuffer,
+    uploadedPdfBuffer,
+    "Downloaded PDF should match the uploaded file",
+  );
+});
+
+test("another owner cannot download the uploaded PDF", async () => {
+  assert.ok(uploadedDocumentId, "Uploaded document ID must exist");
+
+  const result = await request(
+    `/api/documents/${uploadedDocumentId}/download`,
+    {
+      headers: {
+        Authorization: `Bearer ${otherOwnerToken}`,
+      },
+    },
+  );
+
+  assert.equal(result.status, 404, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("unauthenticated users cannot upload documents", async () => {
+  const form = new FormData();
+
+  form.append("propertyId", propertyId);
+  form.append("title", "Unauthenticated Upload");
+  form.append("category", "PROPERTY_DEED");
+
+  form.append(
+    "file",
+    new Blob([uploadedPdfBuffer || Buffer.from("%PDF-1.4\n")], {
+      type: "application/pdf",
+    }),
+    "unauthenticated.pdf",
+  );
+
+  const result = await request("/api/documents/upload", {
+    method: "POST",
+    body: form,
+  });
+
+  assert.equal(result.status, 401, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("unauthenticated users cannot download documents", async () => {
+  assert.ok(uploadedDocumentId, "Uploaded document ID must exist");
+
+  const result = await request(`/api/documents/${uploadedDocumentId}/download`);
+
+  assert.equal(result.status, 401, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+// ============================================================
+// FILE UPLOAD SECURITY TESTS
+// ============================================================
+
+test("upload rejects invalid PDF contents and cleans up the uploaded file", async () => {
+  await documentStorage.ensureStorageDirectory();
+
+  const filesBefore = (await fs.readdir(STORAGE_DIRECTORY)).sort();
+
+  const form = new FormData();
+
+  form.append("propertyId", propertyId);
+  form.append("title", "Invalid PDF Test");
+  form.append("category", "PROPERTY_DEED");
+
+  form.append(
+    "file",
+    new Blob(["This is not a PDF file"], { type: "application/pdf" }),
+    "invalid.pdf",
+  );
+
+  const result = await request("/api/documents/upload", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ownerToken}`,
+    },
+    body: form,
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+  assert.match(result.body.message, /contents do not match/i);
+
+  const filesAfter = (await fs.readdir(STORAGE_DIRECTORY)).sort();
+
+  assert.deepEqual(
+    filesAfter,
+    filesBefore,
+    "Rejected PDF upload must not leave a file in document storage",
+  );
+});
+
+test("upload rejects oversized files and cleans up any partial upload", async () => {
+  await documentStorage.ensureStorageDirectory();
+
+  const filesBefore = (await fs.readdir(STORAGE_DIRECTORY)).sort();
+
+  const form = new FormData();
+
+  form.append("propertyId", propertyId);
+  form.append("title", "Oversized PDF Test");
+  form.append("category", "PROPERTY_DEED");
+
+  // Middleware limit is expected to be 10 MB.
+  const oversizedBuffer = Buffer.alloc(10 * 1024 * 1024 + 1, 0x41);
+
+  form.append(
+    "file",
+    new Blob([oversizedBuffer], { type: "application/pdf" }),
+    "oversized.pdf",
+  );
+
+  const result = await request("/api/documents/upload", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ownerToken}`,
+    },
+    body: form,
+  });
+
+  assert.equal(result.status, 413, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+
+  const filesAfter = (await fs.readdir(STORAGE_DIRECTORY)).sort();
+
+  assert.deepEqual(
+    filesAfter,
+    filesBefore,
+    "Rejected oversized upload must not leave a partial file in document storage",
+  );
+});
+
+test("upload rejects unsupported file extensions without storing a file", async () => {
+  await documentStorage.ensureStorageDirectory();
+
+  const filesBefore = (await fs.readdir(STORAGE_DIRECTORY)).sort();
+
+  const form = new FormData();
+
+  form.append("propertyId", propertyId);
+  form.append("title", "Unsupported File Test");
+  form.append("category", "PROPERTY_DEED");
+
+  form.append(
+    "file",
+    new Blob(["not an allowed document"], {
+      type: "application/octet-stream",
+    }),
+    "unsupported.exe",
+  );
+
+  const result = await request("/api/documents/upload", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ownerToken}`,
+    },
+    body: form,
+  });
+
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+
+  const filesAfter = (await fs.readdir(STORAGE_DIRECTORY)).sort();
+
+  assert.deepEqual(
+    filesAfter,
+    filesBefore,
+    "Unsupported upload must not leave a file in document storage",
+  );
 });
 
 // ============================================================
@@ -373,9 +635,7 @@ test("owner can retrieve document statistics", async () => {
   assert.equal(result.body.success, true);
 
   assert.equal(typeof result.body.stats.totalDocuments, "number");
-
   assert.equal(typeof result.body.stats.sensitiveDocuments, "number");
-
   assert.equal(typeof result.body.stats.expiringSoon, "number");
 
   assert.ok(Array.isArray(result.body.stats.byCategory));

@@ -1,35 +1,50 @@
 ﻿const logger = require("../utils/logger");
 
 const errorHandler = (err, req, res, next) => {
-  logger.error(
-    `${req.method} ${req.originalUrl} - ${err.message}`
-  );
+  logger.error(`${req.method} ${req.originalUrl} - ${err.message}`);
 
   let statusCode = err.statusCode || err.status || 500;
   let message = err.message || "Internal Server Error";
 
-  // Mongoose schema validation errors
+  // Prevent invalid HTTP status codes.
+  if (!Number.isInteger(statusCode) || statusCode < 400 || statusCode > 599) {
+    statusCode = 500;
+  }
+
+  // Malformed JSON submitted to Express.
+  if (
+    err instanceof SyntaxError &&
+    err.status === 400 &&
+    Object.prototype.hasOwnProperty.call(err, "body")
+  ) {
+    statusCode = 400;
+    message = "Invalid JSON request body";
+  }
+
+  // Mongoose schema validation errors.
   if (err.name === "ValidationError") {
     statusCode = 400;
     message = err.message;
   }
 
-  // Invalid MongoDB ObjectId
+  // Invalid MongoDB ObjectId.
   if (err.name === "CastError") {
     statusCode = 400;
     message = "Invalid resource ID";
   }
 
-  // MongoDB duplicate key
+  // MongoDB duplicate key.
   if (err.code === 11000) {
     statusCode = 409;
+
     const field = Object.keys(err.keyValue || {})[0];
+
     message = field
       ? `${field} already exists`
       : "A record with this value already exists";
   }
 
-  // Do not expose internal details for unexpected server errors.
+  // Never expose internal server error details.
   if (statusCode >= 500) {
     message = "Internal Server Error";
   }

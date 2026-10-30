@@ -23,6 +23,7 @@
     "jsonwebtoken": "^9.0.3",
     "luxon": "^3.7.2",
     "mongoose": "^9.9.4",
+    "multer": "^2.5.0",
     "node-cron": "^4.6.0",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"

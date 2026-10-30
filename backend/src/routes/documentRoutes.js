@@ -2,6 +2,8 @@ const express = require("express");
 
 const {
   createDocument,
+  uploadDocument,
+  downloadDocument,
   getMyDocuments,
   getPropertyDocuments,
   getDocumentById,
@@ -12,6 +14,7 @@ const {
 
 const authMiddleware = require("../middleware/authMiddleware");
 const authorize = require("../middleware/roleMiddleware");
+const { handleDocumentUpload } = require("../middleware/documentUpload");
 
 const router = express.Router();
 
@@ -19,7 +22,7 @@ const router = express.Router();
  * @swagger
  * tags:
  *   name: Documents
- *   description: Document Vault management, property documents, and statistics
+ *   description: Document Vault management, file uploads, downloads, and statistics
  */
 
 // ============================================================
@@ -29,16 +32,15 @@ const router = express.Router();
 router.use(authMiddleware);
 
 // ============================================================
-// DOCUMENT VAULT ROUTES
+// CREATE DOCUMENT RECORD
 // ============================================================
 
 /**
  * @swagger
  * /api/documents:
  *   post:
- *     summary: Create a document record
+ *     summary: Create a document record using an existing file URL
  *     operationId: createDocument
- *     description: Creates a document record in the Document Vault.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
@@ -48,40 +50,148 @@ router.use(authMiddleware);
  *         application/json:
  *           schema:
  *             type: object
- *             description: Document fields accepted by the document controller.
- *             additionalProperties: true
+ *             required:
+ *               - propertyId
+ *               - title
+ *               - category
+ *               - fileUrl
+ *               - originalFileName
+ *               - fileType
+ *               - fileSize
  *             properties:
  *               propertyId:
  *                 type: string
- *                 description: MongoDB ID of the associated property.
  *               title:
  *                 type: string
- *                 example: Property Ownership Document
- *               documentType:
+ *               category:
  *                 type: string
- *                 example: OWNERSHIP
+ *                 enum:
+ *                   - PROPERTY_DEED
+ *                   - TAX_RECEIPT
+ *                   - INSURANCE
+ *                   - ELECTRICITY_BILL
+ *                   - WATER_BILL
+ *                   - MAINTENANCE_INVOICE
+ *                   - RENTAL_AGREEMENT
+ *                   - LEGAL_DOCUMENT
+ *                   - IDENTITY_DOCUMENT
+ *                   - OTHER
  *               description:
  *                 type: string
  *               fileUrl:
  *                 type: string
- *                 format: uri
- *               fileName:
+ *               originalFileName:
  *                 type: string
- *               notes:
+ *               fileType:
  *                 type: string
+ *               fileSize:
+ *                 type: number
+ *               documentNumber:
+ *                 type: string
+ *               issuedBy:
+ *                 type: string
+ *               issueDate:
+ *                 type: string
+ *                 format: date
+ *               expiryDate:
+ *                 type: string
+ *                 format: date
+ *               isSensitive:
+ *                 type: boolean
  *     responses:
  *       201:
- *         description: Document created successfully
+ *         description: Document record created successfully
  *       400:
  *         description: Invalid or incomplete document data
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions or property access denied
  *       404:
- *         description: Property not found
+ *         description: Property not found or access denied
  */
 router.post("/", authorize("NRI_OWNER", "ADMIN"), createDocument);
+
+// ============================================================
+// UPLOAD DOCUMENT FILE
+// ============================================================
+
+/**
+ * @swagger
+ * /api/documents/upload:
+ *   post:
+ *     summary: Upload a document file for a property
+ *     operationId: uploadDocument
+ *     description: Uploads a PDF or supported image file and saves its metadata.
+ *     tags: [Documents]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *               - propertyId
+ *               - title
+ *               - category
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *               propertyId:
+ *                 type: string
+ *               title:
+ *                 type: string
+ *               category:
+ *                 type: string
+ *                 enum:
+ *                   - PROPERTY_DEED
+ *                   - TAX_RECEIPT
+ *                   - INSURANCE
+ *                   - ELECTRICITY_BILL
+ *                   - WATER_BILL
+ *                   - MAINTENANCE_INVOICE
+ *                   - RENTAL_AGREEMENT
+ *                   - LEGAL_DOCUMENT
+ *                   - IDENTITY_DOCUMENT
+ *                   - OTHER
+ *               description:
+ *                 type: string
+ *               documentNumber:
+ *                 type: string
+ *               issuedBy:
+ *                 type: string
+ *               issueDate:
+ *                 type: string
+ *                 format: date
+ *               expiryDate:
+ *                 type: string
+ *                 format: date
+ *               isSensitive:
+ *                 type: boolean
+ *     responses:
+ *       201:
+ *         description: Document uploaded successfully
+ *       400:
+ *         description: Invalid input or unsupported file
+ *       401:
+ *         description: Authentication required or token invalid
+ *       404:
+ *         description: Property not found or access denied
+ *       413:
+ *         description: File exceeds the 10 MB upload limit
+ */
+router.post(
+  "/upload",
+  authorize("NRI_OWNER", "ADMIN"),
+  handleDocumentUpload,
+  uploadDocument,
+);
+
+// ============================================================
+// MY DOCUMENTS
+// ============================================================
 
 /**
  * @swagger
@@ -89,7 +199,6 @@ router.post("/", authorize("NRI_OWNER", "ADMIN"), createDocument);
  *   get:
  *     summary: Get my documents
  *     operationId: getMyDocuments
- *     description: Retrieves documents accessible to the authenticated owner.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
@@ -98,10 +207,12 @@ router.post("/", authorize("NRI_OWNER", "ADMIN"), createDocument);
  *         description: Documents retrieved successfully
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions
  */
 router.get("/my", authorize("NRI_OWNER", "ADMIN"), getMyDocuments);
+
+// ============================================================
+// DOCUMENT STATISTICS
+// ============================================================
 
 /**
  * @swagger
@@ -109,19 +220,31 @@ router.get("/my", authorize("NRI_OWNER", "ADMIN"), getMyDocuments);
  *   get:
  *     summary: Get document statistics
  *     operationId: getDocumentStats
- *     description: Retrieves document statistics for the authenticated owner.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: propertyId
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional property ID to filter statistics.
  *     responses:
  *       200:
  *         description: Document statistics retrieved successfully
+ *       400:
+ *         description: Invalid property ID
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions
+ *       404:
+ *         description: Property not found or access denied
  */
 router.get("/stats", authorize("NRI_OWNER", "ADMIN"), getDocumentStats);
+
+// ============================================================
+// PROPERTY DOCUMENTS
+// ============================================================
 
 /**
  * @swagger
@@ -129,7 +252,6 @@ router.get("/stats", authorize("NRI_OWNER", "ADMIN"), getDocumentStats);
  *   get:
  *     summary: Get documents for a property
  *     operationId: getPropertyDocuments
- *     description: Retrieves documents associated with a specific property.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
@@ -139,7 +261,6 @@ router.get("/stats", authorize("NRI_OWNER", "ADMIN"), getDocumentStats);
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the property.
  *     responses:
  *       200:
  *         description: Property documents retrieved successfully
@@ -147,10 +268,8 @@ router.get("/stats", authorize("NRI_OWNER", "ADMIN"), getDocumentStats);
  *         description: Invalid property ID
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions or property access denied
  *       404:
- *         description: Property not found
+ *         description: Property not found or access denied
  */
 router.get(
   "/property/:propertyId",
@@ -158,13 +277,17 @@ router.get(
   getPropertyDocuments,
 );
 
+// ============================================================
+// DOWNLOAD DOCUMENT FILE
+// ============================================================
+
 /**
  * @swagger
- * /api/documents/{documentId}:
+ * /api/documents/{documentId}/download:
  *   get:
- *     summary: Get a document by ID
- *     operationId: getDocumentById
- *     description: Retrieves a single document record.
+ *     summary: Download a stored document file
+ *     operationId: downloadDocument
+ *     description: Downloads a document belonging to the authenticated owner.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
@@ -174,7 +297,46 @@ router.get(
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the document.
+ *     responses:
+ *       200:
+ *         description: Document file downloaded successfully
+ *         content:
+ *           application/octet-stream:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       400:
+ *         description: Invalid document ID
+ *       401:
+ *         description: Authentication required or token invalid
+ *       404:
+ *         description: Document or stored file not found
+ */
+router.get(
+  "/:documentId/download",
+  authorize("NRI_OWNER", "ADMIN"),
+  downloadDocument,
+);
+
+// ============================================================
+// GET SINGLE DOCUMENT RECORD
+// ============================================================
+
+/**
+ * @swagger
+ * /api/documents/{documentId}:
+ *   get:
+ *     summary: Get a document record by ID
+ *     operationId: getDocumentById
+ *     tags: [Documents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: documentId
+ *         required: true
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: Document retrieved successfully
@@ -182,20 +344,21 @@ router.get(
  *         description: Invalid document ID
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions
  *       404:
  *         description: Document not found
  */
 router.get("/:documentId", authorize("NRI_OWNER", "ADMIN"), getDocumentById);
 
+// ============================================================
+// UPDATE DOCUMENT RECORD
+// ============================================================
+
 /**
  * @swagger
  * /api/documents/{documentId}:
  *   put:
- *     summary: Update a document
+ *     summary: Update document metadata
  *     operationId: updateDocument
- *     description: Updates an existing document record.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
@@ -205,29 +368,31 @@ router.get("/:documentId", authorize("NRI_OWNER", "ADMIN"), getDocumentById);
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the document.
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             description: Document fields accepted by the update controller.
- *             additionalProperties: true
  *             properties:
  *               title:
  *                 type: string
- *               documentType:
+ *               category:
  *                 type: string
  *               description:
  *                 type: string
- *               fileUrl:
+ *               documentNumber:
  *                 type: string
- *                 format: uri
- *               fileName:
+ *               issuedBy:
  *                 type: string
- *               notes:
+ *               issueDate:
  *                 type: string
+ *                 format: date
+ *               expiryDate:
+ *                 type: string
+ *                 format: date
+ *               isSensitive:
+ *                 type: boolean
  *     responses:
  *       200:
  *         description: Document updated successfully
@@ -235,12 +400,14 @@ router.get("/:documentId", authorize("NRI_OWNER", "ADMIN"), getDocumentById);
  *         description: Invalid document ID or update data
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions
  *       404:
  *         description: Document not found
  */
 router.put("/:documentId", authorize("NRI_OWNER", "ADMIN"), updateDocument);
+
+// ============================================================
+// ARCHIVE DOCUMENT
+// ============================================================
 
 /**
  * @swagger
@@ -248,7 +415,6 @@ router.put("/:documentId", authorize("NRI_OWNER", "ADMIN"), updateDocument);
  *   delete:
  *     summary: Archive a document
  *     operationId: deleteDocument
- *     description: Archives or deletes a document according to the application's implementation.
  *     tags: [Documents]
  *     security:
  *       - bearerAuth: []
@@ -258,7 +424,6 @@ router.put("/:documentId", authorize("NRI_OWNER", "ADMIN"), updateDocument);
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the document.
  *     responses:
  *       200:
  *         description: Document archived successfully
@@ -266,8 +431,6 @@ router.put("/:documentId", authorize("NRI_OWNER", "ADMIN"), updateDocument);
  *         description: Invalid document ID
  *       401:
  *         description: Authentication required or token invalid
- *       403:
- *         description: Insufficient permissions
  *       404:
  *         description: Document not found
  */

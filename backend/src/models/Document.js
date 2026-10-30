@@ -108,6 +108,22 @@ const documentSchema = new mongoose.Schema(
       min: [0, "File size cannot be negative"],
     },
 
+    storageKey: {
+      type: String,
+      trim: true,
+      maxlength: [100, "Storage key cannot exceed 100 characters"],
+      default: null,
+    },
+
+    storageProvider: {
+      type: String,
+      enum: {
+        values: ["LOCAL", "CLOUD"],
+        message: "Invalid storage provider",
+      },
+      default: null,
+    },
+
     // ==========================================================
     // DOCUMENT METADATA
     // ==========================================================

@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const Document = require("../models/Document");
 const Property = require("../models/Property");
 const createAuditLog = require("../utils/auditLogger");
+const documentStorage = require("../services/documentStorage");
 
 // ============================================================
 // HELPERS
@@ -15,39 +16,76 @@ const createError = (message, statusCode = 400) => {
 };
 
 const isValidObjectId = (id) => {
-  return mongoose.Types.ObjectId.isValid(id);
+  return (
+    typeof id === "string" &&
+    mongoose.Types.ObjectId.isValid(id) &&
+    String(new mongoose.Types.ObjectId(id)) === id
+  );
 };
 
-// ============================================================
-// DOCUMENT AUDIT SNAPSHOT
-// ============================================================
+const parseBoolean = (value, fieldName = "Value") => {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
 
-const getDocumentAuditValues = (document) => {
-  return {
-    property: document.property,
-    owner: document.owner,
-
-    title: document.title,
-    category: document.category,
-    description: document.description,
-
-    originalFileName: document.originalFileName,
-    fileType: document.fileType,
-    fileSize: document.fileSize,
-
-    documentNumber: document.documentNumber,
-    issuedBy: document.issuedBy,
-    issueDate: document.issueDate,
-    expiryDate: document.expiryDate,
-
-    status: document.status,
-    isSensitive: document.isSensitive,
-    isActive: document.isActive,
-  };
+  throw createError(`${fieldName} must be true or false`, 400);
 };
 
+const parseOptionalDate = (value, fieldName) => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    throw createError(`Invalid ${fieldName}`, 400);
+  }
+
+  return date;
+};
+
+const validateDocumentDates = (issueDate, expiryDate) => {
+  const now = new Date();
+
+  if (issueDate && issueDate > now) {
+    throw createError("Issue date cannot be in the future", 400);
+  }
+
+  if (expiryDate && expiryDate < now) {
+    throw createError("Expiry date cannot be in the past", 400);
+  }
+
+  if (issueDate && expiryDate && issueDate > expiryDate) {
+    throw createError("Issue date cannot be later than expiry date", 400);
+  }
+};
+
+const getDocumentAuditValues = (document) => ({
+  property: document.property,
+  owner: document.owner,
+  title: document.title,
+  category: document.category,
+  description: document.description,
+  originalFileName: document.originalFileName,
+  fileType: document.fileType,
+  fileSize: document.fileSize,
+  documentNumber: document.documentNumber,
+  issuedBy: document.issuedBy,
+  issueDate: document.issueDate,
+  expiryDate: document.expiryDate,
+  status: document.status,
+  isSensitive: document.isSensitive,
+  isActive: document.isActive,
+});
+
+const populateDocument = (query) =>
+  query
+    .populate("property", "title propertyType address")
+    .populate("owner", "name email");
+
 // ============================================================
-// CREATE DOCUMENT
+// CREATE DOCUMENT RECORD
+// Existing JSON-based endpoint; does not upload a physical file.
 // ============================================================
 
 const createDocument = async (req, res, next) => {
@@ -68,17 +106,39 @@ const createDocument = async (req, res, next) => {
       isSensitive,
     } = req.body;
 
-    // --------------------------------------------------------
-    // Validate property ID
-    // --------------------------------------------------------
-
     if (!propertyId || !isValidObjectId(propertyId)) {
       throw createError("Valid property ID is required", 400);
     }
 
-    // --------------------------------------------------------
-    // Verify property belongs to logged-in owner
-    // --------------------------------------------------------
+    if (typeof title !== "string" || !title.trim()) {
+      throw createError("Document title is required", 400);
+    }
+
+    if (typeof category !== "string" || !category.trim()) {
+      throw createError("Document category is required", 400);
+    }
+
+    if (typeof fileUrl !== "string" || !fileUrl.trim()) {
+      throw createError("Document file URL is required", 400);
+    }
+
+    if (typeof originalFileName !== "string" || !originalFileName.trim()) {
+      throw createError("Original file name is required", 400);
+    }
+
+    if (typeof fileType !== "string" || !fileType.trim()) {
+      throw createError("File type is required", 400);
+    }
+
+    if (
+      fileSize === undefined ||
+      fileSize === null ||
+      fileSize === "" ||
+      !Number.isFinite(Number(fileSize)) ||
+      Number(fileSize) < 0
+    ) {
+      throw createError("A valid non-negative file size is required", 400);
+    }
 
     const property = await Property.findOne({
       _id: propertyId,
@@ -91,107 +151,35 @@ const createDocument = async (req, res, next) => {
       throw createError("Property not found or access denied", 404);
     }
 
-    // --------------------------------------------------------
-    // Required fields
-    // --------------------------------------------------------
+    const parsedIssueDate = parseOptionalDate(issueDate, "issue date");
+    const parsedExpiryDate = parseOptionalDate(expiryDate, "expiry date");
 
-    if (!title || !title.trim()) {
-      throw createError("Document title is required", 400);
-    }
+    validateDocumentDates(parsedIssueDate, parsedExpiryDate);
 
-    if (!category) {
-      throw createError("Document category is required", 400);
-    }
-
-    if (!fileUrl || !fileUrl.trim()) {
-      throw createError("Document file URL is required", 400);
-    }
-
-    if (!originalFileName || !originalFileName.trim()) {
-      throw createError("Original file name is required", 400);
-    }
-
-    if (!fileType) {
-      throw createError("File type is required", 400);
-    }
-
-    if (fileSize === undefined || fileSize === null) {
-      throw createError("File size is required", 400);
-    }
-
-    if (Number(fileSize) < 0) {
-      throw createError("File size cannot be negative", 400);
-    }
-
-    // --------------------------------------------------------
-    // Validate dates
-    // --------------------------------------------------------
-
-    let parsedIssueDate = null;
-    let parsedExpiryDate = null;
-
-    if (issueDate) {
-      parsedIssueDate = new Date(issueDate);
-
-      if (Number.isNaN(parsedIssueDate.getTime())) {
-        throw createError("Invalid issue date", 400);
-      }
-
-      if (parsedIssueDate > new Date()) {
-        throw createError("Issue date cannot be in the future", 400);
-      }
-    }
-
-    if (expiryDate) {
-      parsedExpiryDate = new Date(expiryDate);
-
-      if (Number.isNaN(parsedExpiryDate.getTime())) {
-        throw createError("Invalid expiry date", 400);
-      }
-
-      if (parsedExpiryDate < new Date()) {
-        throw createError("Expiry date cannot be in the past", 400);
-      }
-    }
-
-    // --------------------------------------------------------
-    // Cross-date validation
-    // --------------------------------------------------------
-
-    if (
-      parsedIssueDate &&
-      parsedExpiryDate &&
-      parsedIssueDate > parsedExpiryDate
-    ) {
-      throw createError("Issue date cannot be later than expiry date", 400);
-    }
-
-    // --------------------------------------------------------
-    // Create document
-    // --------------------------------------------------------
+    const parsedIsSensitive =
+      isSensitive === undefined
+        ? false
+        : parseBoolean(isSensitive, "isSensitive");
 
     const document = await Document.create({
       property: property._id,
       owner: req.user.userId,
       title: title.trim(),
-      category,
-      description: description?.trim() || "",
+      category: category.trim(),
+      description: typeof description === "string" ? description.trim() : "",
       fileUrl: fileUrl.trim(),
       originalFileName: originalFileName.trim(),
-      fileType,
+      fileType: fileType.trim(),
       fileSize: Number(fileSize),
-      documentNumber: documentNumber?.trim() || "",
-      issuedBy: issuedBy?.trim() || "",
+      documentNumber:
+        typeof documentNumber === "string" ? documentNumber.trim() : "",
+      issuedBy: typeof issuedBy === "string" ? issuedBy.trim() : "",
       issueDate: parsedIssueDate,
       expiryDate: parsedExpiryDate,
       status: "ACTIVE",
-      isSensitive: Boolean(isSensitive),
+      isSensitive: parsedIsSensitive,
       isActive: true,
     });
-
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
 
     await createAuditLog({
       req,
@@ -204,13 +192,9 @@ const createDocument = async (req, res, next) => {
       newValues: getDocumentAuditValues(document),
     });
 
-    // --------------------------------------------------------
-    // Populate response
-    // --------------------------------------------------------
-
-    const populatedDocument = await Document.findById(document._id)
-      .populate("property", "title propertyType address")
-      .populate("owner", "name email");
+    const populatedDocument = await populateDocument(
+      Document.findById(document._id),
+    );
 
     return res.status(201).json({
       success: true,
@@ -218,7 +202,197 @@ const createDocument = async (req, res, next) => {
       document: populatedDocument,
     });
   } catch (error) {
-    next(error);
+    return next(error);
+  }
+};
+
+// ============================================================
+// UPLOAD DOCUMENT FILE
+// Requires documentUpload middleware to populate req.documentUpload.
+// ============================================================
+
+const uploadDocument = async (req, res, next) => {
+  let storageKey;
+  let createdDocumentId;
+
+  try {
+    const {
+      propertyId,
+      title,
+      category,
+      description,
+      documentNumber,
+      issuedBy,
+      issueDate,
+      expiryDate,
+      isSensitive,
+    } = req.body;
+
+    const uploadedFile = req.documentUpload;
+
+    if (!uploadedFile || !uploadedFile.storageKey) {
+      throw createError("A document file is required", 400);
+    }
+
+    storageKey = uploadedFile.storageKey;
+
+    if (!propertyId || !isValidObjectId(propertyId)) {
+      throw createError("Valid property ID is required", 400);
+    }
+
+    if (typeof title !== "string" || !title.trim()) {
+      throw createError("Document title is required", 400);
+    }
+
+    if (typeof category !== "string" || !category.trim()) {
+      throw createError("Document category is required", 400);
+    }
+
+    const property = await Property.findOne({
+      _id: propertyId,
+      owner: req.user.userId,
+      isActive: true,
+      status: "ACTIVE",
+    });
+
+    if (!property) {
+      throw createError("Property not found or access denied", 404);
+    }
+
+    const parsedIssueDate = parseOptionalDate(issueDate, "issue date");
+    const parsedExpiryDate = parseOptionalDate(expiryDate, "expiry date");
+
+    validateDocumentDates(parsedIssueDate, parsedExpiryDate);
+
+    const parsedIsSensitive =
+      isSensitive === undefined
+        ? false
+        : parseBoolean(isSensitive, "isSensitive");
+
+    const documentId = new mongoose.Types.ObjectId();
+
+    const document = await Document.create({
+      _id: documentId,
+      property: property._id,
+      owner: req.user.userId,
+      title: title.trim(),
+      category: category.trim(),
+      description: typeof description === "string" ? description.trim() : "",
+      fileUrl: `/api/documents/${documentId}/download`,
+      originalFileName: uploadedFile.originalFileName,
+      fileType: uploadedFile.fileType,
+      fileSize: uploadedFile.fileSize,
+      storageKey: uploadedFile.storageKey,
+      storageProvider: "LOCAL",
+      documentNumber:
+        typeof documentNumber === "string" ? documentNumber.trim() : "",
+      issuedBy: typeof issuedBy === "string" ? issuedBy.trim() : "",
+      issueDate: parsedIssueDate,
+      expiryDate: parsedExpiryDate,
+      status: "ACTIVE",
+      isSensitive: parsedIsSensitive,
+      isActive: true,
+    });
+
+    createdDocumentId = document._id;
+
+    const populatedDocument = await populateDocument(
+      Document.findById(document._id),
+    );
+
+    await createAuditLog({
+      req,
+      action: "DOCUMENT_CREATED",
+      resourceType: "DOCUMENT",
+      resourceId: document._id,
+      property: property._id,
+      description: `Document "${document.title}" was uploaded for property "${property.title}".`,
+      oldValues: null,
+      newValues: getDocumentAuditValues(document),
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Document uploaded successfully",
+      document: populatedDocument,
+    });
+  } catch (error) {
+    // Roll back the new record if a later upload operation fails.
+    if (createdDocumentId) {
+      await Document.deleteOne({ _id: createdDocumentId }).catch(() => {});
+    }
+
+    // Remove the physical upload when the operation does not complete.
+    if (storageKey) {
+      await documentStorage.deleteFile(storageKey).catch(() => {});
+    }
+
+    return next(error);
+  }
+};
+
+// ============================================================
+// DOWNLOAD DOCUMENT FILE
+// ============================================================
+
+const downloadDocument = async (req, res, next) => {
+  try {
+    const { documentId } = req.params;
+
+    if (!isValidObjectId(documentId)) {
+      throw createError("Invalid document ID", 400);
+    }
+
+    const document = await Document.findOne({
+      _id: documentId,
+      owner: req.user.userId,
+      isActive: true,
+      status: { $ne: "ARCHIVED" },
+    });
+
+    if (!document) {
+      throw createError("Document not found", 404);
+    }
+
+    if (document.storageProvider !== "LOCAL" || !document.storageKey) {
+      throw createError("This document has no locally stored file", 404);
+    }
+
+    const filePath = documentStorage.getFilePath(document.storageKey);
+
+    const contentTypes = {
+      PDF: "application/pdf",
+      JPG: "image/jpeg",
+      JPEG: "image/jpeg",
+      PNG: "image/png",
+      WEBP: "image/webp",
+    };
+
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader(
+      "Content-Type",
+      contentTypes[document.fileType] || "application/octet-stream",
+    );
+
+    const safeDownloadName = String(document.originalFileName || "document")
+      .replace(/[\/\\]/g, "_")
+      .replace(/[\r\n"]/g, "_");
+
+    return res.download(filePath, safeDownloadName, (error) => {
+      if (!error) return;
+
+      if (res.headersSent) {
+        return;
+      }
+
+      if (error.code === "ENOENT") {
+        return next(createError("Stored document file was not found", 404));
+      }
+
+      return next(error);
+    });
+  } catch (error) {
+    return next(error);
   }
 };
 
@@ -241,12 +415,12 @@ const getMyDocuments = async (req, res, next) => {
       documents,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ============================================================
-// GET PROPERTY DOCUMENTS
+// GET DOCUMENTS FOR A PROPERTY
 // ============================================================
 
 const getPropertyDocuments = async (req, res, next) => {
@@ -257,7 +431,6 @@ const getPropertyDocuments = async (req, res, next) => {
       throw createError("Invalid property ID", 400);
     }
 
-    // Verify ownership
     const property = await Property.findOne({
       _id: propertyId,
       owner: req.user.userId,
@@ -286,7 +459,7 @@ const getPropertyDocuments = async (req, res, next) => {
       documents,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -319,12 +492,14 @@ const getDocumentById = async (req, res, next) => {
       document,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ============================================================
-// UPDATE DOCUMENT
+// UPDATE DOCUMENT METADATA
+// File metadata cannot be changed through this endpoint.
+// Upload a new file through the upload endpoint instead.
 // ============================================================
 
 const updateDocument = async (req, res, next) => {
@@ -345,20 +520,12 @@ const updateDocument = async (req, res, next) => {
       throw createError("Document not found", 404);
     }
 
-    // --------------------------------------------------------
-    // Capture old values BEFORE modification
-    // --------------------------------------------------------
-
     const oldValues = getDocumentAuditValues(document);
 
     const allowedFields = [
       "title",
       "category",
       "description",
-      "fileUrl",
-      "originalFileName",
-      "fileType",
-      "fileSize",
       "documentNumber",
       "issuedBy",
       "issueDate",
@@ -366,71 +533,31 @@ const updateDocument = async (req, res, next) => {
       "isSensitive",
     ];
 
-    // --------------------------------------------------------
-    // Update only allowed fields
-    // --------------------------------------------------------
+    for (const field of allowedFields) {
+      if (req.body[field] === undefined) continue;
 
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        document[field] = req.body[field];
+      if (field === "isSensitive") {
+        document.isSensitive = parseBoolean(req.body[field], "isSensitive");
+      } else if (field === "issueDate" || field === "expiryDate") {
+        document[field] = parseOptionalDate(req.body[field], field);
+      } else if (typeof req.body[field] === "string") {
+        document[field] = req.body[field].trim();
+      } else {
+        throw createError(`Invalid value for ${field}`, 400);
       }
-    });
-
-    // --------------------------------------------------------
-    // Validate title
-    // --------------------------------------------------------
-
-    if (document.title) {
-      document.title = document.title.trim();
     }
 
-    if (!document.title) {
+    if (!document.title || !document.title.trim()) {
       throw createError("Document title is required", 400);
     }
 
-    // --------------------------------------------------------
-    // Validate file size
-    // --------------------------------------------------------
-
-    if (document.fileSize < 0) {
-      throw createError("File size cannot be negative", 400);
-    }
-
-    // --------------------------------------------------------
-    // Validate dates
-    // --------------------------------------------------------
-
-    if (document.issueDate && document.issueDate > new Date()) {
-      throw createError("Issue date cannot be in the future", 400);
-    }
-
-    if (document.expiryDate && document.expiryDate < new Date()) {
-      throw createError("Expiry date cannot be in the past", 400);
-    }
-
-    if (
-      document.issueDate &&
-      document.expiryDate &&
-      document.issueDate > document.expiryDate
-    ) {
-      throw createError("Issue date cannot be later than expiry date", 400);
-    }
-
-    // --------------------------------------------------------
-    // Save
-    // --------------------------------------------------------
+    validateDocumentDates(document.issueDate, document.expiryDate);
 
     await document.save();
 
-    // --------------------------------------------------------
-    // Capture new values AFTER modification
-    // --------------------------------------------------------
-
-    const newValues = getDocumentAuditValues(document);
-
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
+    const updatedDocument = await populateDocument(
+      Document.findById(document._id),
+    );
 
     await createAuditLog({
       req,
@@ -440,16 +567,8 @@ const updateDocument = async (req, res, next) => {
       property: document.property,
       description: `Document "${document.title}" was updated.`,
       oldValues,
-      newValues,
+      newValues: getDocumentAuditValues(document),
     });
-
-    // --------------------------------------------------------
-    // Populate response
-    // --------------------------------------------------------
-
-    const updatedDocument = await Document.findById(document._id)
-      .populate("property", "title propertyType address")
-      .populate("owner", "name email");
 
     return res.status(200).json({
       success: true,
@@ -457,7 +576,7 @@ const updateDocument = async (req, res, next) => {
       document: updatedDocument,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -483,26 +602,12 @@ const deleteDocument = async (req, res, next) => {
       throw createError("Document not found", 404);
     }
 
-    // --------------------------------------------------------
-    // Capture old values BEFORE archive
-    // --------------------------------------------------------
-
     const oldValues = getDocumentAuditValues(document);
 
     document.isActive = false;
     document.status = "ARCHIVED";
 
     await document.save();
-
-    // --------------------------------------------------------
-    // Capture new values AFTER archive
-    // --------------------------------------------------------
-
-    const newValues = getDocumentAuditValues(document);
-
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
 
     await createAuditLog({
       req,
@@ -512,7 +617,7 @@ const deleteDocument = async (req, res, next) => {
       property: document.property,
       description: `Document "${document.title}" was archived.`,
       oldValues,
-      newValues,
+      newValues: getDocumentAuditValues(document),
     });
 
     return res.status(200).json({
@@ -520,7 +625,7 @@ const deleteDocument = async (req, res, next) => {
       message: "Document archived successfully",
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -536,10 +641,6 @@ const getDocumentStats = async (req, res, next) => {
       owner: new mongoose.Types.ObjectId(req.user.userId),
       isActive: true,
     };
-
-    // --------------------------------------------------------
-    // Optional property filter
-    // --------------------------------------------------------
 
     if (propertyId) {
       if (!isValidObjectId(propertyId)) {
@@ -559,75 +660,46 @@ const getDocumentStats = async (req, res, next) => {
       match.property = new mongoose.Types.ObjectId(propertyId);
     }
 
-    // --------------------------------------------------------
-    // Total documents
-    // --------------------------------------------------------
+    const [
+      totalDocuments,
+      byCategory,
+      byStatus,
+      sensitiveDocuments,
+      expiringSoon,
+    ] = await Promise.all([
+      Document.countDocuments(match),
 
-    const totalDocuments = await Document.countDocuments(match);
+      Document.aggregate([
+        { $match: match },
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
 
-    // --------------------------------------------------------
-    // Category statistics
-    // --------------------------------------------------------
+      Document.aggregate([
+        { $match: match },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
 
-    const byCategory = await Document.aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: "$category",
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $sort: {
-          count: -1,
-        },
-      },
+      Document.countDocuments({
+        ...match,
+        isSensitive: true,
+      }),
+
+      (() => {
+        const now = new Date();
+        const thirtyDaysLater = new Date(now);
+        thirtyDaysLater.setDate(thirtyDaysLater.getDate() + 30);
+
+        return Document.countDocuments({
+          ...match,
+          expiryDate: {
+            $gte: now,
+            $lte: thirtyDaysLater,
+          },
+        });
+      })(),
     ]);
-
-    // --------------------------------------------------------
-    // Status statistics
-    // --------------------------------------------------------
-
-    const byStatus = await Document.aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $sort: {
-          count: -1,
-        },
-      },
-    ]);
-
-    // --------------------------------------------------------
-    // Sensitive documents
-    // --------------------------------------------------------
-
-    const sensitiveDocuments = await Document.countDocuments({
-      ...match,
-      isSensitive: true,
-    });
-
-    // --------------------------------------------------------
-    // Expiring soon — next 30 days
-    // --------------------------------------------------------
-
-    const now = new Date();
-
-    const thirtyDaysLater = new Date();
-    thirtyDaysLater.setDate(thirtyDaysLater.getDate() + 30);
-
-    const expiringSoon = await Document.countDocuments({
-      ...match,
-      expiryDate: {
-        $gte: now,
-        $lte: thirtyDaysLater,
-      },
-    });
 
     return res.status(200).json({
       success: true,
@@ -640,7 +712,7 @@ const getDocumentStats = async (req, res, next) => {
       },
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -650,6 +722,8 @@ const getDocumentStats = async (req, res, next) => {
 
 module.exports = {
   createDocument,
+  uploadDocument,
+  downloadDocument,
   getMyDocuments,
   getPropertyDocuments,
   getDocumentById,

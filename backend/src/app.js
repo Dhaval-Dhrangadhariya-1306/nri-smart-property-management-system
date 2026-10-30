@@ -60,11 +60,19 @@ app.use(
 // BODY PARSERS
 // ============================================================
 
-app.use(express.json());
+// Limit JSON payloads to 1 MB.
+app.use(
+  express.json({
+    limit: "1mb",
+  }),
+);
 
+// Limit URL-encoded payloads and parameter counts.
 app.use(
   express.urlencoded({
     extended: true,
+    limit: "10kb",
+    parameterLimit: 100,
   }),
 );
 
