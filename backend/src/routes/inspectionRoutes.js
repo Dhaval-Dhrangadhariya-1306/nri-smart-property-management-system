@@ -89,7 +89,11 @@ router.post("/", authorize("CARETAKER"), createInspection);
  *       403:
  *         description: Caretaker role required
  */
-router.get("/my", authorize("CARETAKER"), getMyInspections);
+router.get(
+  "/my",
+  authorize("CARETAKER", "NRI_OWNER", "ADMIN"),
+  getMyInspections,
+);
 
 /**
  * @swagger

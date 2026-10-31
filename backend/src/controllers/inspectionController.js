@@ -388,16 +388,32 @@ const createInspection = async (req, res, next) => {
 
 const getMyInspections = async (req, res, next) => {
   try {
-    const inspections = await Inspection.find({
-      caretaker: req.user.userId,
-    })
+    let filter = {};
+
+    if (req.user.role === "CARETAKER") {
+      filter = { caretaker: req.user.userId };
+    } else if (req.user.role === "NRI_OWNER") {
+      const ownerProperties = await Property.find({
+        owner: req.user.userId,
+        isActive: true,
+      }).select("_id");
+      const propertyIds = ownerProperties.map((p) => p._id);
+      filter = { property: { $in: propertyIds } };
+    }
+
+    const inspections = await Inspection.find(filter)
       .populate({
         path: "property",
         select:
           "title propertyType address status occupancy condition health lastInspectionAt nextInspectionAt",
       })
+      .populate({
+        path: "caretaker",
+        select: "name email role",
+      })
       .sort({
         inspectedAt: -1,
+        createdAt: -1,
       });
 
     return res.status(200).json({

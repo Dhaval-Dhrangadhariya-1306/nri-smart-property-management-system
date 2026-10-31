@@ -36,6 +36,11 @@ export const getArray = (value) => {
     "notifications",
     "requests",
     "vendors",
+    "caretakers",
+    "assignments",
+    "inspections",
+    "actionableInsights",
+    "insights",
     "data",
     "logs",
     "events",
@@ -44,8 +49,18 @@ export const getArray = (value) => {
   }
   return [];
 };
-export const errorMessage = (error) =>
-  error?.response?.data?.message ||
-  error?.response?.data?.error ||
-  error?.message ||
-  "Something went wrong. Please try again.";
+export const errorMessage = (error) => {
+  const data = error?.response?.data;
+  if (data?.message) {
+    if (Array.isArray(data.message)) return data.message.join(", ");
+    return String(data.message);
+  }
+  if (data?.error) {
+    if (typeof data.error === "string") return data.error;
+    if (data.error.message) return data.error.message;
+  }
+  if (Array.isArray(data?.errors)) {
+    return data.errors.map((e) => e.msg || e.message || String(e)).join(", ");
+  }
+  return error?.message || "Something went wrong. Please try again.";
+};

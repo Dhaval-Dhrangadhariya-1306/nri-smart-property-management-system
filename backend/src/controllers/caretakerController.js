@@ -972,10 +972,44 @@ const getCaretakerAssignmentHistory = async (req, res, next) => {
 };
 
 // ============================================================
+// GET ALL CARETAKERS
+// ============================================================
+
+const getCaretakers = async (req, res, next) => {
+  try {
+    const caretakers = await User.find({ role: "CARETAKER" })
+      .select("name email phone isActive createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formatted = caretakers.map((c) => ({
+      _id: c._id,
+      id: c._id,
+      name: c.name,
+      email: c.email,
+      phone: c.phone || "—",
+      status: c.isActive ? "ACTIVE" : "INACTIVE",
+      createdAt: c.createdAt,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      count: formatted.length,
+      data: {
+        caretakers: formatted,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
 module.exports = {
+  getCaretakers,
   createCaretaker,
   assignCaretaker,
   getPropertyCaretakers,

@@ -1,9 +1,12 @@
-﻿require("dotenv").config();
+const path = require("node:path");
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
+require("dotenv").config();
 
 const mongoose = require("mongoose");
 
 const app = require("./app");
-const connectDB = require("./config/db");
+const { connectDB, disconnectDB } = require("./config/db");
+const seedDemoData = require("./utils/seedDemoData");
 const logger = require("./utils/logger");
 const { startBackgroundJobs, stopBackgroundJobs } = require("./jobs/scheduler");
 
@@ -65,7 +68,7 @@ const startServer = async () => {
 
       // Attempt DB cleanup even if HTTP shutdown failed.
       try {
-        await mongoose.disconnect();
+        await disconnectDB();
         logger.info("MongoDB connection closed");
       } catch (error) {
         exitCode = 1;
@@ -82,6 +85,11 @@ const startServer = async () => {
   try {
     // Connect to MongoDB before accepting requests.
     await connectDB();
+
+    // In development, seed demo data if database is empty.
+    if (process.env.NODE_ENV !== "production") {
+      await seedDemoData();
+    }
 
     // Start background jobs only after the DB connection succeeds.
     startBackgroundJobs();
@@ -119,7 +127,7 @@ const startServer = async () => {
     }
 
     try {
-      await mongoose.disconnect();
+      await disconnectDB();
     } catch (shutdownError) {
       logger.error(
         `Failed to close MongoDB after startup error: ${shutdownError.message}`,

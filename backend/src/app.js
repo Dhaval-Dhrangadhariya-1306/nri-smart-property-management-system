@@ -1,6 +1,9 @@
-﻿const express = require("express");
+const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const mongoose = require("mongoose");
+const path = require("node:path");
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 require("dotenv").config();
 
 // ============================================================
@@ -80,12 +83,34 @@ app.use(
 // HEALTH CHECK
 // ============================================================
 
-app.get("/", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "NRI Smart Property Management System API is running",
+const getHealthStatus = (req, res) => {
+  const stateMap = {
+    0: "disconnected",
+    1: "connected",
+    2: "connecting",
+    3: "disconnecting",
+  };
+  const readyState = mongoose.connection.readyState;
+  const dbState = stateMap[readyState] || "unknown";
+  const isConnected = readyState === 1;
+
+  res.status(isConnected ? 200 : 503).json({
+    success: isConnected,
+    message: isConnected
+      ? "NRI Smart Property Management System API is running"
+      : "Database is not connected",
+    database: {
+      status: dbState,
+      isConnected,
+      host: mongoose.connection.host || null,
+      name: mongoose.connection.name || null,
+      isInMemory: (mongoose.connection.host || "").includes("127.0.0.1"),
+    },
   });
-});
+};
+
+app.get("/", getHealthStatus);
+app.get("/api/health", getHealthStatus);
 
 // ============================================================
 // SWAGGER API DOCUMENTATION

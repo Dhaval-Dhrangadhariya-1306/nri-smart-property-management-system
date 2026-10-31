@@ -56,17 +56,19 @@ const configs = {
     empty: "No maintenance requests found. Create a request to get started.",
     fields: [
       ["title", "Request Title"],
+      ["category", "Category"],
       ["description", "Description"],
       ["propertyId", "Property ID"],
       ["priority", "Priority"],
     ],
     columns: [
       ["title", "Request"],
+      ["category", "Category"],
       ["status", "Status"],
       ["priority", "Priority"],
       ["createdAt", "Created"],
     ],
-    search: ["title", "description", "status", "priority"],
+    search: ["title", "description", "status", "priority", "category"],
   },
 
   inspections: {
@@ -83,10 +85,11 @@ const configs = {
     ],
     columns: [
       ["property", "Property"],
+      ["overallCondition", "Condition"],
       ["status", "Status"],
       ["createdAt", "Date"],
     ],
-    search: ["property", "status", "notes"],
+    search: ["property", "status", "notes", "overallCondition"],
   },
 
   monitoring: {
@@ -99,17 +102,19 @@ const configs = {
     empty: "No monitoring events found.",
     fields: [
       ["propertyId", "Property ID"],
+      ["title", "Event Title"],
       ["eventType", "Event Type"],
       ["description", "Description"],
       ["severity", "Severity"],
     ],
     columns: [
-      ["eventType", "Event"],
-      ["description", "Description"],
+      ["title", "Event Title"],
+      ["eventType", "Event Type"],
       ["severity", "Severity"],
+      ["status", "Status"],
       ["createdAt", "Date"],
     ],
-    search: ["eventType", "description", "severity", "status"],
+    search: ["title", "eventType", "description", "severity", "status"],
   },
 
   caretakers: {
@@ -117,16 +122,19 @@ const configs = {
     eyebrow: "PEOPLE & ASSIGNMENTS",
     description: "Coordinate trusted on-ground support for your properties.",
     endpoint: "/caretakers",
+    create: "/caretakers/create",
     button: "Add Caretaker",
-    empty: "Caretaker assignments will appear here when available.",
+    empty: "Caretakers will appear here when available.",
     fields: [
       ["name", "Caretaker Name"],
       ["email", "Email Address"],
       ["phone", "Phone Number"],
+      ["password", "Initial Password"],
     ],
     columns: [
       ["name", "Caretaker"],
       ["email", "Email"],
+      ["phone", "Phone"],
       ["status", "Status"],
     ],
     search: ["name", "email", "phone"],
@@ -191,17 +199,17 @@ const configs = {
     empty: "Your documents will appear here when available.",
     fields: [
       ["title", "Document Title"],
-      ["documentType", "Document Type"],
+      ["category", "Document Category"],
       ["propertyId", "Property ID"],
       ["expiryDate", "Expiry Date"],
     ],
     columns: [
       ["title", "Document"],
-      ["documentType", "Type"],
+      ["category", "Type"],
       ["expiryDate", "Expiry Date"],
       ["status", "Status"],
     ],
-    search: ["title", "documentType", "status"],
+    search: ["title", "category", "documentType", "status"],
   },
 
   notifications: {
@@ -361,7 +369,14 @@ export default function ResourcePage({ type }) {
   };
 
   const openCreateModal = () => {
-    setForm(type === "maintenance" ? { priority: "Medium" } : {});
+    let initial = {};
+    if (type === "maintenance") initial = { priority: "MEDIUM", category: "PLUMBING" };
+    else if (type === "properties") initial = { propertyType: "APARTMENT", country: "India" };
+    else if (type === "monitoring") initial = { severity: "MEDIUM", eventType: "SECURITY_INCIDENT" };
+    else if (type === "vendors") initial = { category: "PLUMBING" };
+    else if (type === "expenses") initial = { category: "MAINTENANCE" };
+    else if (type === "documents") initial = { category: "PROPERTY_DEED" };
+    setForm(initial);
     setError("");
     setModal(true);
   };
@@ -385,12 +400,28 @@ export default function ResourcePage({ type }) {
         payload.amount = Number(payload.amount);
       }
 
+      if (payload.propertyType) {
+        payload.propertyType = String(payload.propertyType).toUpperCase();
+      }
+      if (payload.priority) {
+        payload.priority = String(payload.priority).toUpperCase();
+      }
+      if (payload.severity) {
+        payload.severity = String(payload.severity).toUpperCase();
+      }
+      if (payload.category) {
+        payload.category = String(payload.category).toUpperCase();
+      }
+      if (payload.eventType) {
+        payload.eventType = String(payload.eventType).toUpperCase();
+      }
+
       if (type === "properties") {
         payload.address = {
           addressLine1: payload.addressLine1,
           city: payload.city,
           state: payload.state,
-          country: payload.country,
+          country: payload.country || "India",
           postalCode: payload.postalCode,
         };
 
@@ -399,6 +430,21 @@ export default function ResourcePage({ type }) {
         delete payload.state;
         delete payload.country;
         delete payload.postalCode;
+      }
+
+      if (type === "documents") {
+        payload.fileUrl =
+          payload.fileUrl ||
+          "https://storage.estatepro.local/docs/" + Date.now();
+        payload.originalFileName =
+          payload.originalFileName || (payload.title || "document") + ".pdf";
+        payload.fileType = payload.fileType || "application/pdf";
+        payload.fileSize = payload.fileSize ? Number(payload.fileSize) : 102400;
+        payload.category = (
+          payload.category ||
+          payload.documentType ||
+          "OTHER"
+        ).toUpperCase();
       }
 
       await api.post(cfg.create, payload);
@@ -796,25 +842,125 @@ export default function ResourcePage({ type }) {
 
                   {key === "priority" ? (
                     <select
-                      value={form[key] || "Medium"}
+                      value={form[key] || "MEDIUM"}
                       onChange={(event) => updateField(key, event.target.value)}
                       required
                     >
-                      <option value="Low">Low</option>
-                      <option value="Medium">Medium</option>
-                      <option value="High">High</option>
-                      <option value="Urgent">Urgent</option>
+                      <option value="LOW">Low</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="HIGH">High</option>
+                      <option value="URGENT">Urgent</option>
                     </select>
                   ) : key === "severity" ? (
                     <select
-                      value={form[key] || "Medium"}
+                      value={form[key] || "MEDIUM"}
                       onChange={(event) => updateField(key, event.target.value)}
                       required
                     >
-                      <option value="Low">Low</option>
-                      <option value="Medium">Medium</option>
-                      <option value="High">High</option>
-                      <option value="Critical">Critical</option>
+                      <option value="LOW">Low</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="HIGH">High</option>
+                      <option value="CRITICAL">Critical</option>
+                      <option value="INFO">Info</option>
+                    </select>
+                  ) : key === "propertyType" ? (
+                    <select
+                      value={form[key] || "APARTMENT"}
+                      onChange={(event) => updateField(key, event.target.value)}
+                      required
+                    >
+                      <option value="APARTMENT">Apartment</option>
+                      <option value="HOUSE">House</option>
+                      <option value="VILLA">Villa</option>
+                      <option value="PLOT">Plot</option>
+                      <option value="COMMERCIAL">Commercial</option>
+                      <option value="OFFICE">Office</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  ) : key === "eventType" ? (
+                    <select
+                      value={form[key] || "SECURITY_INCIDENT"}
+                      onChange={(event) => updateField(key, event.target.value)}
+                      required
+                    >
+                      <option value="SECURITY_INCIDENT">Security Incident</option>
+                      <option value="UNAUTHORIZED_ACCESS">Unauthorized Access</option>
+                      <option value="SUSPICIOUS_ACTIVITY">Suspicious Activity</option>
+                      <option value="WATER_LEAK">Water Leak</option>
+                      <option value="FIRE_ALERT">Fire Alert</option>
+                      <option value="PROPERTY_DAMAGE">Property Damage</option>
+                      <option value="ACCESS_ISSUE">Access Issue</option>
+                      <option value="MAINTENANCE_ALERT">Maintenance Alert</option>
+                      <option value="CARETAKER_ALERT">Caretaker Alert</option>
+                      <option value="SYSTEM_WARNING">System Warning</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  ) : key === "category" ? (
+                    <select
+                      value={form[key] || (type === "maintenance" ? "PLUMBING" : type === "vendors" ? "PLUMBING" : type === "expenses" ? "MAINTENANCE" : "PROPERTY_DEED")}
+                      onChange={(event) => updateField(key, event.target.value)}
+                      required
+                    >
+                      {type === "maintenance" && (
+                        <>
+                          <option value="PLUMBING">Plumbing</option>
+                          <option value="ELECTRICAL">Electrical</option>
+                          <option value="HVAC">HVAC</option>
+                          <option value="CLEANING">Cleaning</option>
+                          <option value="SECURITY">Security</option>
+                          <option value="STRUCTURAL">Structural</option>
+                          <option value="APPLIANCE">Appliance</option>
+                          <option value="PEST_CONTROL">Pest Control</option>
+                          <option value="OTHER">Other</option>
+                        </>
+                      )}
+                      {type === "vendors" && (
+                        <>
+                          <option value="PLUMBING">Plumbing</option>
+                          <option value="ELECTRICAL">Electrical</option>
+                          <option value="CLEANING">Cleaning</option>
+                          <option value="SECURITY">Security</option>
+                          <option value="PAINTING">Painting</option>
+                          <option value="CARPENTRY">Carpentry</option>
+                          <option value="HVAC">HVAC</option>
+                          <option value="PEST_CONTROL">Pest Control</option>
+                          <option value="APPLIANCE">Appliance</option>
+                          <option value="LANDSCAPING">Landscaping</option>
+                          <option value="CONSTRUCTION">Construction</option>
+                          <option value="LEGAL">Legal</option>
+                          <option value="INSURANCE">Insurance</option>
+                          <option value="OTHER">Other</option>
+                        </>
+                      )}
+                      {type === "expenses" && (
+                        <>
+                          <option value="MAINTENANCE">Maintenance</option>
+                          <option value="ELECTRICITY">Electricity</option>
+                          <option value="WATER">Water</option>
+                          <option value="PROPERTY_TAX">Property Tax</option>
+                          <option value="INSURANCE">Insurance</option>
+                          <option value="SECURITY">Security</option>
+                          <option value="CLEANING">Cleaning</option>
+                          <option value="REPAIR">Repair</option>
+                          <option value="RENOVATION">Renovation</option>
+                          <option value="UTILITY">Utility</option>
+                          <option value="OTHER">Other</option>
+                        </>
+                      )}
+                      {type === "documents" && (
+                        <>
+                          <option value="PROPERTY_DEED">Property Deed</option>
+                          <option value="TAX_RECEIPT">Tax Receipt</option>
+                          <option value="INSURANCE">Insurance</option>
+                          <option value="ELECTRICITY_BILL">Electricity Bill</option>
+                          <option value="WATER_BILL">Water Bill</option>
+                          <option value="MAINTENANCE_INVOICE">Maintenance Invoice</option>
+                          <option value="RENTAL_AGREEMENT">Rental Agreement</option>
+                          <option value="LEGAL_DOCUMENT">Legal Document</option>
+                          <option value="IDENTITY_DOCUMENT">Identity Document</option>
+                          <option value="OTHER">Other</option>
+                        </>
+                      )}
                     </select>
                   ) : key === "description" || key === "notes" ? (
                     <textarea
@@ -832,7 +978,9 @@ export default function ResourcePage({ type }) {
                             ? "date"
                             : key === "email"
                               ? "email"
-                              : "text"
+                              : key === "password"
+                                ? "password"
+                                : "text"
                       }
                       value={form[key] || ""}
                       onChange={(event) => updateField(key, event.target.value)}
@@ -841,8 +989,10 @@ export default function ResourcePage({ type }) {
                         "name",
                         "title",
                         "amount",
+                        "password",
                         "propertyId",
                       ].includes(key)}
+                      minLength={key === "password" ? 8 : undefined}
                       min={key === "amount" ? "0" : undefined}
                       step={key === "amount" ? "0.01" : undefined}
                     />

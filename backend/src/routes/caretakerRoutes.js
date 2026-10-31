@@ -1,6 +1,7 @@
 const express = require("express");
 
 const {
+  getCaretakers,
   createCaretaker,
   assignCaretaker,
   getPropertyCaretakers,
@@ -36,6 +37,8 @@ router.use(authMiddleware);
 // ============================================================
 // OWNER / ADMIN
 // ============================================================
+
+router.get("/", authorize("NRI_OWNER", "ADMIN"), getCaretakers);
 
 /**
  * @swagger

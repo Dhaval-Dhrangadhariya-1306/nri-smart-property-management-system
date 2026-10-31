@@ -1,0 +1,13 @@
+{
+  "name": "nri-smart-property-management-system",
+  "version": "1.0.0",
+  "description": "Full-stack NRI Smart Property Management System",
+  "private": true,
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "start:backend": "npm --prefix backend start",
+    "build:frontend": "npm --prefix frontend run build",
+    "test:backend": "npm --prefix backend run test:expense"
+  }
+}
