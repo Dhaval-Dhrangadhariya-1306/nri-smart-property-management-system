@@ -16,7 +16,9 @@ const seedDemoData = async () => {
       return;
     }
 
-    logger.info("Database is empty. Seeding initial demo data for NRI Owner...");
+    logger.info(
+      "Database is empty. Seeding initial demo data for NRI Owner...",
+    );
 
     const hashedPassword = await hashPassword("Password123!");
 
@@ -121,7 +123,8 @@ const seedDemoData = async () => {
       assignedCaretaker: caretaker._id,
       assignedVendor: vendor._id,
       title: "HVAC Servicing & Filter Replacement",
-      description: "Seasonal preventative maintenance for master bedroom air conditioning.",
+      description:
+        "Seasonal preventative maintenance for master bedroom air conditioning.",
       category: "HVAC",
       priority: "MEDIUM",
       status: "IN_PROGRESS",
@@ -135,7 +138,8 @@ const seedDemoData = async () => {
       eventType: "SECURITY_INCIDENT",
       severity: "LOW",
       title: "Perimeter Sensor Triggered",
-      description: "Motion detected on driveway sensor. Checked by caretaker, confirmed stray cat.",
+      description:
+        "Motion detected on driveway sensor. Checked by caretaker, confirmed stray cat.",
       status: "RESOLVED",
       resolvedAt: new Date(),
     });
@@ -171,7 +175,8 @@ const seedDemoData = async () => {
     await Notification.create({
       recipient: owner._id,
       title: "Welcome to EstatePro",
-      message: "Your NRI smart property management portfolio is connected and active.",
+      message:
+        "Your NRI smart property management portfolio is connected and active.",
       type: "SYSTEM",
       priority: "LOW",
       isRead: false,
