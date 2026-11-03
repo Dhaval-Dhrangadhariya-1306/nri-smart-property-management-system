@@ -3,12 +3,14 @@ import {
   Activity,
   Bell,
   Building2,
+  ClipboardCheck,
   HeartPulse,
   RefreshCw,
   Wallet,
   Wrench,
 } from "lucide-react";
 import { api, errorMessage, getArray, unwrap } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 
 const cards = [
   {
@@ -44,14 +46,22 @@ const cards = [
 function firstValue(source, keys, fallback = null) {
   for (const key of keys) {
     const value = key.split(".").reduce((obj, part) => obj?.[part], source);
-    if (value !== undefined && value !== null && value !== "") return value;
+
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
   }
+
   return fallback;
 }
 
 function money(value) {
   const number = Number(value);
-  if (!Number.isFinite(number)) return value ?? "—";
+
+  if (!Number.isFinite(number)) {
+    return value ?? "—";
+  }
+
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -60,8 +70,12 @@ function money(value) {
 }
 
 function dateLabel(value) {
-  if (!value) return "Recently updated";
+  if (!value) {
+    return "Recently updated";
+  }
+
   const date = new Date(value);
+
   return Number.isNaN(date.getTime())
     ? String(value)
     : date.toLocaleDateString("en-IN", {
@@ -77,6 +91,7 @@ function EmptyState({ icon: Icon, title, text }) {
       <span className="empty-state-icon">
         <Icon size={26} />
       </span>
+
       <h3>{title}</h3>
       <p>{text}</p>
     </div>
@@ -88,23 +103,29 @@ function RecordList({ items, kind }) {
     const details = {
       properties: [
         Building2,
-        "No property data available",
-        "Your property records will appear here when the API returns them.",
+        "No assigned properties",
+        "Properties assigned to you will appear here.",
       ],
       notifications: [
         Bell,
-        "You’re all caught up",
+        "You're all caught up",
         "Recent notifications will appear here when available.",
       ],
       maintenance: [
         Wrench,
-        "No maintenance requests available",
-        "Requests and their current statuses will appear here.",
+        "No maintenance requests",
+        "Maintenance requests and their current statuses will appear here.",
       ],
-    }[kind];
-    return (
-      <EmptyState icon={details[0]} title={details[1]} text={details[2]} />
-    );
+      inspections: [
+        ClipboardCheck,
+        "No inspections available",
+        "Your inspection records will appear here after an inspection is submitted.",
+      ],
+    };
+
+    const [Icon, title, text] = details[kind] || details.properties;
+
+    return <EmptyState icon={Icon} title={title} text={text} />;
   }
 
   return (
@@ -114,7 +135,7 @@ function RecordList({ items, kind }) {
           kind === "properties"
             ? firstValue(
                 item,
-                ["title", "name", "propertyName"],
+                ["title", "name", "propertyName", "property.title"],
                 `Property ${index + 1}`,
               )
             : kind === "notifications"
@@ -123,26 +144,66 @@ function RecordList({ items, kind }) {
                   ["title", "message", "description"],
                   "Notification",
                 )
-              : firstValue(
-                  item,
-                  ["title", "description", "issue"],
-                  `Maintenance request ${index + 1}`,
-                );
+              : kind === "inspections"
+                ? firstValue(
+                    item,
+                    [
+                      "title",
+                      "propertyName",
+                      "property.title",
+                      "overallCondition",
+                      "inspectionType",
+                    ],
+                    `Inspection ${index + 1}`,
+                  )
+                : firstValue(
+                    item,
+                    ["title", "description", "issue", "issueDescription"],
+                    `Maintenance request ${index + 1}`,
+                  );
+
         const subtitle =
           kind === "properties"
             ? firstValue(
                 item,
-                ["address.city", "city", "address", "location"],
+                [
+                  "address.city",
+                  "address",
+                  "city",
+                  "location",
+                  "property.address.city",
+                ],
                 "Address not provided",
               )
             : kind === "notifications"
-              ? dateLabel(firstValue(item, ["createdAt", "date"]))
-              : firstValue(
-                  item,
-                  ["propertyName", "property.name", "category", "priority"],
-                  "Maintenance request",
-                );
-        const status = firstValue(item, ["status"], "");
+              ? dateLabel(firstValue(item, ["createdAt", "date", "updatedAt"]))
+              : kind === "inspections"
+                ? dateLabel(
+                    firstValue(item, [
+                      "inspectionDate",
+                      "createdAt",
+                      "date",
+                      "updatedAt",
+                    ]),
+                  )
+                : firstValue(
+                    item,
+                    [
+                      "propertyName",
+                      "property.title",
+                      "property.name",
+                      "category",
+                      "priority",
+                    ],
+                    "Maintenance request",
+                  );
+
+        const status = firstValue(
+          item,
+          ["status", "overallCondition", "securityStatus"],
+          "",
+        );
+
         return (
           <div
             className="dashboard-list-item"
@@ -153,14 +214,18 @@ function RecordList({ items, kind }) {
                 <Building2 size={18} />
               ) : kind === "notifications" ? (
                 <Bell size={18} />
+              ) : kind === "inspections" ? (
+                <ClipboardCheck size={18} />
               ) : (
                 <Wrench size={18} />
               )}
             </span>
+
             <div className="dashboard-list-copy">
               <strong>{String(title)}</strong>
               <span>{String(subtitle)}</span>
             </div>
+
             {status && (
               <span
                 className={`status-tag ${String(status)
@@ -177,7 +242,44 @@ function RecordList({ items, kind }) {
   );
 }
 
+function extractPropertiesFromAssignments(assignments) {
+  return assignments
+    .map((assignment) => {
+      const property = assignment?.property || assignment?.propertyId;
+
+      if (property && typeof property === "object") {
+        return property;
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function countPendingMaintenance(items) {
+  const pendingStatuses = [
+    "PENDING",
+    "OPEN",
+    "ASSIGNED",
+    "IN_PROGRESS",
+    "IN PROGRESS",
+  ];
+
+  return items.filter((item) =>
+    pendingStatuses.includes(
+      String(item?.status || "")
+        .trim()
+        .toUpperCase(),
+    ),
+  ).length;
+}
+
 export default function Dashboard() {
+  const { user } = useAuth();
+
+  const role = String(user?.role || "").toUpperCase();
+  const isCaretaker = role === "CARETAKER";
+
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -186,9 +288,75 @@ export default function Dashboard() {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
+
     try {
-      const response = await api.get("/dashboard/owner");
-      setData(unwrap(response));
+      if (isCaretaker) {
+        /*
+         * Caretakers must not call /dashboard/owner.
+         * That endpoint is restricted to NRI_OWNER and ADMIN.
+         *
+         * Load only caretaker-accessible resources.
+         */
+        const results = await Promise.allSettled([
+          api.get("/caretakers/my-properties"),
+          api.get("/inspections/my"),
+          api.get("/maintenance/caretaker/my"),
+          api.get("/notifications/my"),
+        ]);
+
+        const [
+          propertyResult,
+          inspectionResult,
+          maintenanceResult,
+          notificationResult,
+        ] = results;
+
+        /*
+         * Assigned properties are required for the caretaker dashboard.
+         * If this request fails, show the actual API error.
+         */
+        if (propertyResult.status === "rejected") {
+          throw propertyResult.reason;
+        }
+
+        const assignments = getArray(unwrap(propertyResult.value));
+
+        const properties = extractPropertiesFromAssignments(assignments);
+
+        const inspections =
+          inspectionResult.status === "fulfilled"
+            ? getArray(unwrap(inspectionResult.value))
+            : [];
+
+        const maintenance =
+          maintenanceResult.status === "fulfilled"
+            ? getArray(unwrap(maintenanceResult.value))
+            : [];
+
+        const notifications =
+          notificationResult.status === "fulfilled"
+            ? getArray(unwrap(notificationResult.value))
+            : [];
+
+        setData({
+          properties,
+          inspections,
+          maintenance,
+          notifications,
+          totalProperties: properties.length,
+          pendingMaintenance: countPendingMaintenance(maintenance),
+          propertyHealth: null,
+          totalExpenses: null,
+        });
+      } else {
+        /*
+         * Owner and admin dashboard.
+         * Backend authorization remains unchanged.
+         */
+        const response = await api.get("/dashboard/owner");
+        setData(unwrap(response));
+      }
+
       setUpdatedAt(new Date());
     } catch (err) {
       setError(errorMessage(err));
@@ -196,7 +364,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isCaretaker]);
 
   useEffect(() => {
     refresh();
@@ -214,6 +382,7 @@ export default function Dashboard() {
       [],
     ),
   );
+
   const notifications = getArray(
     firstValue(
       data,
@@ -226,6 +395,7 @@ export default function Dashboard() {
       [],
     ),
   );
+
   const maintenance = getArray(
     firstValue(
       data,
@@ -239,27 +409,44 @@ export default function Dashboard() {
       [],
     ),
   );
+
+  const inspections = getArray(
+    firstValue(
+      data,
+      ["inspections", "data.inspections", "recentInspections"],
+      [],
+    ),
+  );
+
   const propertyCount = firstValue(
     data,
     ["totalProperties", "stats.totalProperties", "summary.totalProperties"],
-    properties.length || null,
+    properties.length,
   );
+
   const health = firstValue(data, [
     "propertyHealth",
     "stats.propertyHealth",
     "summary.propertyHealth",
     "healthScore",
   ]);
-  const pending = firstValue(data, [
-    "pendingMaintenance",
-    "stats.pendingMaintenance",
-    "summary.pendingMaintenance",
-  ]);
+
+  const pending = firstValue(
+    data,
+    [
+      "pendingMaintenance",
+      "stats.pendingMaintenance",
+      "summary.pendingMaintenance",
+    ],
+    isCaretaker ? countPendingMaintenance(maintenance) : null,
+  );
+
   const expenses = firstValue(data, [
     "totalExpenses",
     "stats.totalExpenses",
     "summary.totalExpenses",
   ]);
+
   const values = {
     properties: propertyCount,
     health:
@@ -272,16 +459,25 @@ export default function Dashboard() {
     expenses: expenses == null ? null : money(expenses),
   };
 
+  const visibleCards = cards.filter(
+    ({ key }) => !isCaretaker || key !== "expenses",
+  );
+
   return (
     <div className="dashboard">
       <header className="dashboard-header">
         <div>
           <p className="dashboard-eyebrow">ESTATEPRO / OVERVIEW</p>
+
           <h1>Dashboard</h1>
+
           <p className="dashboard-subtitle">
-            Welcome back! Here’s an overview of your property portfolio.
+            {isCaretaker
+              ? "View your assigned properties, inspections, maintenance, and notifications."
+              : "Welcome back! Here's an overview of your property portfolio."}
           </p>
         </div>
+
         <button
           className="dashboard-refresh"
           type="button"
@@ -292,48 +488,65 @@ export default function Dashboard() {
           {loading ? "Refreshing…" : "Refresh"}
         </button>
       </header>
+
       {error && (
         <div className="error-banner" role="alert">
           <Activity size={17} />
+
           <div>
             <strong>Dashboard data unavailable</strong>
             <span>{error}</span>
           </div>
-          <button type="button" onClick={refresh}>
+
+          <button type="button" onClick={refresh} disabled={loading}>
             Retry
           </button>
         </div>
       )}
+
       <section className="dashboard-stats">
-        {cards.map(({ key, title, description, icon: Icon, tone }) => (
+        {visibleCards.map(({ key, title, description, icon: Icon, tone }) => (
           <article className="stat-card" key={key}>
             <div className="stat-card-top">
               <span className={`stat-icon ${tone}`}>
                 <Icon size={21} />
               </span>
+
               <span className="stat-indicator">
                 {loading ? "Loading" : data ? "Live data" : "Overview"}
               </span>
             </div>
+
             <h3>{title}</h3>
+
             <p className="stat-value">
               {loading ? "…" : values[key] == null ? "—" : values[key]}
             </p>
+
             <p className="stat-description">{description}</p>
           </article>
         ))}
       </section>
+
       <section className="dashboard-grid">
         <article className="dashboard-panel">
           <div className="panel-heading">
             <div>
-              <h2>Property Overview</h2>
-              <p>Your managed properties and their details.</p>
+              <h2>
+                {isCaretaker ? "Assigned Properties" : "Property Overview"}
+              </h2>
+              <p>
+                {isCaretaker
+                  ? "Properties assigned to you for management."
+                  : "Your managed properties and their details."}
+              </p>
             </div>
+
             <span className="panel-icon">
               <Building2 size={20} />
             </span>
           </div>
+
           {loading ? (
             <EmptyState
               icon={Building2}
@@ -344,16 +557,19 @@ export default function Dashboard() {
             <RecordList items={properties} kind="properties" />
           )}
         </article>
+
         <article className="dashboard-panel">
           <div className="panel-heading">
             <div>
               <h2>Recent Notifications</h2>
               <p>Important updates and alerts.</p>
             </div>
+
             <span className="panel-icon">
               <Bell size={20} />
             </span>
           </div>
+
           {loading ? (
             <EmptyState
               icon={Bell}
@@ -364,16 +580,44 @@ export default function Dashboard() {
             <RecordList items={notifications} kind="notifications" />
           )}
         </article>
+
+        {isCaretaker && (
+          <article className="dashboard-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Recent Inspections</h2>
+                <p>Review your submitted property inspections.</p>
+              </div>
+
+              <span className="panel-icon">
+                <ClipboardCheck size={20} />
+              </span>
+            </div>
+
+            {loading ? (
+              <EmptyState
+                icon={ClipboardCheck}
+                title="Loading inspections"
+                text="Retrieving your inspection records."
+              />
+            ) : (
+              <RecordList items={inspections} kind="inspections" />
+            )}
+          </article>
+        )}
+
         <article className="dashboard-panel dashboard-wide">
           <div className="panel-heading">
             <div>
               <h2>Maintenance Activity</h2>
               <p>Track requests and their progress.</p>
             </div>
+
             <span className="panel-icon">
               <Wrench size={20} />
             </span>
           </div>
+
           {loading ? (
             <EmptyState
               icon={Wrench}
@@ -385,9 +629,13 @@ export default function Dashboard() {
           )}
         </article>
       </section>
+
       <div className="dashboard-last-updated">
         {updatedAt
-          ? `Last refreshed ${updatedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`
+          ? `Last refreshed ${updatedAt.toLocaleTimeString("en-IN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}`
           : "Dashboard overview"}
       </div>
     </div>

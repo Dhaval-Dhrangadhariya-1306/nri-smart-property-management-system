@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { api, errorMessage, getArray, unwrap } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 
 const configs = {
   properties: {
@@ -77,6 +78,7 @@ const configs = {
     description:
       "Review inspection activity and maintain property condition records.",
     endpoint: "/inspections/my",
+    create: "/inspections",
     button: "New Inspection",
     empty: "Inspection records will appear here when available.",
     fields: [
@@ -194,7 +196,7 @@ const configs = {
     eyebrow: "PROPERTY RECORDS",
     description: "Keep property documents organized and monitor expiry dates.",
     endpoint: "/documents/my",
-    create: "/documents",
+    create: "/documents/upload",
     button: "Add Document",
     empty: "Your documents will appear here when available.",
     fields: [
@@ -261,6 +263,16 @@ const configs = {
   },
 };
 
+const CARETAKER_RESTRICTED_SECTIONS = [
+  "caretakers",
+  "vendors",
+  "expenses",
+  "documents",
+  "monitoring",
+  "activity",
+  "insights",
+];
+
 function human(value) {
   if (value === null || value === undefined || value === "") {
     return "—";
@@ -304,8 +316,42 @@ function statusClass(value) {
     .replace(/\s+/g, "-");
 }
 
+function extractAssignedProperties(result) {
+  const assignments = Array.isArray(result?.assignments)
+    ? result.assignments
+    : getArray(result);
+
+  return assignments
+    .map((assignment) => {
+      const property = assignment?.property || assignment?.propertyId;
+
+      if (property && typeof property === "object") {
+        return property;
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
+
 export default function ResourcePage({ type }) {
+  const { user } = useAuth();
+
+  const role = String(user?.role || "").toUpperCase();
+  const isCaretaker = role === "CARETAKER";
+  const isOwnerOrAdmin = ["NRI_OWNER", "ADMIN"].includes(role);
+
   const cfg = configs[type] || configs.properties;
+
+  const accessDenied =
+    isCaretaker && CARETAKER_RESTRICTED_SECTIONS.includes(type);
+
+  const endpoint =
+    isCaretaker && type === "properties"
+      ? "/caretakers/my-properties"
+      : isCaretaker && type === "maintenance"
+        ? "/maintenance/caretaker/my"
+        : cfg.endpoint;
 
   const [items, setItems] = useState([]);
   const [busy, setBusy] = useState(true);
@@ -318,13 +364,32 @@ export default function ResourcePage({ type }) {
   const [form, setForm] = useState({});
   const [notice, setNotice] = useState("");
 
+  const canCreate =
+    Boolean(cfg.create) &&
+    (isOwnerOrAdmin ||
+      (isCaretaker && ["maintenance", "inspections"].includes(type)));
+
   const load = useCallback(async () => {
     setBusy(true);
     setError("");
 
     try {
-      const response = await api.get(cfg.endpoint);
-      setItems(getArray(unwrap(response)));
+      if (accessDenied) {
+        setItems([]);
+        setError(
+          "This section is restricted to property owners and administrators.",
+        );
+        return;
+      }
+
+      const response = await api.get(endpoint);
+      const result = unwrap(response);
+
+      if (isCaretaker && type === "properties") {
+        setItems(extractAssignedProperties(result));
+      } else {
+        setItems(getArray(result));
+      }
     } catch (err) {
       setItems([]);
       setError(errorMessage(err));
@@ -332,7 +397,7 @@ export default function ResourcePage({ type }) {
       setBusy(false);
       setRefreshing(false);
     }
-  }, [cfg.endpoint]);
+  }, [accessDenied, endpoint, isCaretaker, type]);
 
   useEffect(() => {
     load();
@@ -369,23 +434,55 @@ export default function ResourcePage({ type }) {
   };
 
   const openCreateModal = () => {
+    if (!canCreate) {
+      setError("You do not have permission to create records in this section.");
+      return;
+    }
+
     let initial = {};
-    if (type === "maintenance") initial = { priority: "MEDIUM", category: "PLUMBING" };
-    else if (type === "properties") initial = { propertyType: "APARTMENT", country: "India" };
-    else if (type === "monitoring") initial = { severity: "MEDIUM", eventType: "SECURITY_INCIDENT" };
-    else if (type === "vendors") initial = { category: "PLUMBING" };
-    else if (type === "expenses") initial = { category: "MAINTENANCE" };
-    else if (type === "documents") initial = { category: "PROPERTY_DEED" };
+
+    if (type === "maintenance") {
+      initial = {
+        priority: "MEDIUM",
+        category: "PLUMBING",
+      };
+    } else if (type === "properties") {
+      initial = {
+        propertyType: "APARTMENT",
+        country: "India",
+      };
+    } else if (type === "inspections") {
+      initial = {
+        overallCondition: "GOOD",
+        securityStatus: "NORMAL",
+        electricalStatus: "NORMAL",
+        plumbingStatus: "NORMAL",
+        cleanliness: "GOOD",
+      };
+    } else if (type === "monitoring") {
+      initial = {
+        severity: "MEDIUM",
+        eventType: "SECURITY_INCIDENT",
+      };
+    } else if (type === "vendors") {
+      initial = { category: "PLUMBING" };
+    } else if (type === "expenses") {
+      initial = { category: "MAINTENANCE" };
+    } else if (type === "documents") {
+      initial = { category: "PROPERTY_DEED" };
+    }
+
     setForm(initial);
     setError("");
+    setNotice("");
     setModal(true);
   };
 
   const submit = async (event) => {
     event.preventDefault();
 
-    if (!cfg.create) {
-      setNotice("Creating records is not available for this section.");
+    if (!canCreate || !cfg.create) {
+      setError("You do not have permission to create records in this section.");
       setModal(false);
       return;
     }
@@ -400,20 +497,21 @@ export default function ResourcePage({ type }) {
         payload.amount = Number(payload.amount);
       }
 
-      if (payload.propertyType) {
-        payload.propertyType = String(payload.propertyType).toUpperCase();
-      }
-      if (payload.priority) {
-        payload.priority = String(payload.priority).toUpperCase();
-      }
-      if (payload.severity) {
-        payload.severity = String(payload.severity).toUpperCase();
-      }
-      if (payload.category) {
-        payload.category = String(payload.category).toUpperCase();
-      }
-      if (payload.eventType) {
-        payload.eventType = String(payload.eventType).toUpperCase();
+      for (const key of [
+        "propertyType",
+        "priority",
+        "severity",
+        "category",
+        "eventType",
+        "overallCondition",
+        "securityStatus",
+        "electricalStatus",
+        "plumbingStatus",
+        "cleanliness",
+      ]) {
+        if (payload[key]) {
+          payload[key] = String(payload[key]).toUpperCase();
+        }
       }
 
       if (type === "properties") {
@@ -436,10 +534,14 @@ export default function ResourcePage({ type }) {
         payload.fileUrl =
           payload.fileUrl ||
           "https://storage.estatepro.local/docs/" + Date.now();
+
         payload.originalFileName =
           payload.originalFileName || (payload.title || "document") + ".pdf";
+
         payload.fileType = payload.fileType || "application/pdf";
+
         payload.fileSize = payload.fileSize ? Number(payload.fileSize) : 102400;
+
         payload.category = (
           payload.category ||
           payload.documentType ||
@@ -496,7 +598,7 @@ export default function ResourcePage({ type }) {
         </div>
 
         <div className="resource-actions">
-          {cfg.create && (
+          {canCreate && (
             <button className="primary-btn" onClick={openCreateModal}>
               <Plus size={17} />
               {cfg.button}
@@ -533,11 +635,15 @@ export default function ResourcePage({ type }) {
           <AlertCircle size={17} />
 
           <div>
-            <strong>Couldn't load this section</strong>
+            <strong>
+              {accessDenied
+                ? "Access restricted"
+                : "Couldn't load this section"}
+            </strong>
             <span>{error}</span>
           </div>
 
-          <button onClick={load}>Try again</button>
+          {!accessDenied && <button onClick={load}>Try again</button>}
         </div>
       )}
 
@@ -684,20 +790,24 @@ export default function ResourcePage({ type }) {
             </div>
 
             <h3>
-              {search || statusFilter !== "all"
-                ? "No Matching Records"
-                : "Nothing to Show Just Yet"}
+              {accessDenied
+                ? "Access Restricted"
+                : search || statusFilter !== "all"
+                  ? "No Matching Records"
+                  : "Nothing to Show Just Yet"}
             </h3>
 
             <p>
-              {error
-                ? "The API could not be reached. Records will load when the backend is available."
-                : search || statusFilter !== "all"
-                  ? "Try changing the search term or status filter."
-                  : cfg.empty}
+              {accessDenied
+                ? "This resource is available to property owners and administrators."
+                : error
+                  ? "The API could not return records. Check the error message above and verify the backend endpoint."
+                  : search || statusFilter !== "all"
+                    ? "Try changing the search term or status filter."
+                    : cfg.empty}
             </p>
 
-            {cfg.create && (
+            {canCreate && (
               <button className="secondary-btn" onClick={openCreateModal}>
                 <Plus size={16} />
                 {cfg.button}
@@ -787,7 +897,7 @@ export default function ResourcePage({ type }) {
         <div className="table-footer">
           <span>
             {error
-              ? "Backend connection is unavailable."
+              ? "Check the error message above."
               : "Data shown is returned by your connected backend."}
           </span>
 
@@ -831,8 +941,8 @@ export default function ResourcePage({ type }) {
             </div>
 
             <p className="modal-description">
-              Enter the details below. The fields are based on the current
-              frontend configuration and may need to match backend validation.
+              Enter the details below. Fields must satisfy the validation rules
+              of the backend API.
             </p>
 
             <div className="modal-fields">
@@ -877,27 +987,74 @@ export default function ResourcePage({ type }) {
                       <option value="OFFICE">Office</option>
                       <option value="OTHER">Other</option>
                     </select>
+                  ) : key === "overallCondition" ? (
+                    <select
+                      value={form[key] || "GOOD"}
+                      onChange={(event) => updateField(key, event.target.value)}
+                      required
+                    >
+                      <option value="EXCELLENT">Excellent</option>
+                      <option value="GOOD">Good</option>
+                      <option value="FAIR">Fair</option>
+                      <option value="POOR">Poor</option>
+                      <option value="CRITICAL">Critical</option>
+                    </select>
+                  ) : [
+                      "securityStatus",
+                      "electricalStatus",
+                      "plumbingStatus",
+                      "cleanliness",
+                    ].includes(key) ? (
+                    <select
+                      value={form[key] || "NORMAL"}
+                      onChange={(event) => updateField(key, event.target.value)}
+                      required
+                    >
+                      <option value="NORMAL">Normal</option>
+                      <option value="GOOD">Good</option>
+                      <option value="FAIR">Fair</option>
+                      <option value="POOR">Poor</option>
+                      <option value="ISSUE_FOUND">Issue Found</option>
+                      <option value="NEEDS_ATTENTION">Needs Attention</option>
+                    </select>
                   ) : key === "eventType" ? (
                     <select
                       value={form[key] || "SECURITY_INCIDENT"}
                       onChange={(event) => updateField(key, event.target.value)}
                       required
                     >
-                      <option value="SECURITY_INCIDENT">Security Incident</option>
-                      <option value="UNAUTHORIZED_ACCESS">Unauthorized Access</option>
-                      <option value="SUSPICIOUS_ACTIVITY">Suspicious Activity</option>
+                      <option value="SECURITY_INCIDENT">
+                        Security Incident
+                      </option>
+                      <option value="UNAUTHORIZED_ACCESS">
+                        Unauthorized Access
+                      </option>
+                      <option value="SUSPICIOUS_ACTIVITY">
+                        Suspicious Activity
+                      </option>
                       <option value="WATER_LEAK">Water Leak</option>
                       <option value="FIRE_ALERT">Fire Alert</option>
                       <option value="PROPERTY_DAMAGE">Property Damage</option>
                       <option value="ACCESS_ISSUE">Access Issue</option>
-                      <option value="MAINTENANCE_ALERT">Maintenance Alert</option>
+                      <option value="MAINTENANCE_ALERT">
+                        Maintenance Alert
+                      </option>
                       <option value="CARETAKER_ALERT">Caretaker Alert</option>
                       <option value="SYSTEM_WARNING">System Warning</option>
                       <option value="OTHER">Other</option>
                     </select>
                   ) : key === "category" ? (
                     <select
-                      value={form[key] || (type === "maintenance" ? "PLUMBING" : type === "vendors" ? "PLUMBING" : type === "expenses" ? "MAINTENANCE" : "PROPERTY_DEED")}
+                      value={
+                        form[key] ||
+                        (type === "maintenance"
+                          ? "PLUMBING"
+                          : type === "vendors"
+                            ? "PLUMBING"
+                            : type === "expenses"
+                              ? "MAINTENANCE"
+                              : "PROPERTY_DEED")
+                      }
                       onChange={(event) => updateField(key, event.target.value)}
                       required
                     >
@@ -914,6 +1071,7 @@ export default function ResourcePage({ type }) {
                           <option value="OTHER">Other</option>
                         </>
                       )}
+
                       {type === "vendors" && (
                         <>
                           <option value="PLUMBING">Plumbing</option>
@@ -932,6 +1090,7 @@ export default function ResourcePage({ type }) {
                           <option value="OTHER">Other</option>
                         </>
                       )}
+
                       {type === "expenses" && (
                         <>
                           <option value="MAINTENANCE">Maintenance</option>
@@ -947,17 +1106,26 @@ export default function ResourcePage({ type }) {
                           <option value="OTHER">Other</option>
                         </>
                       )}
+
                       {type === "documents" && (
                         <>
                           <option value="PROPERTY_DEED">Property Deed</option>
                           <option value="TAX_RECEIPT">Tax Receipt</option>
                           <option value="INSURANCE">Insurance</option>
-                          <option value="ELECTRICITY_BILL">Electricity Bill</option>
+                          <option value="ELECTRICITY_BILL">
+                            Electricity Bill
+                          </option>
                           <option value="WATER_BILL">Water Bill</option>
-                          <option value="MAINTENANCE_INVOICE">Maintenance Invoice</option>
-                          <option value="RENTAL_AGREEMENT">Rental Agreement</option>
+                          <option value="MAINTENANCE_INVOICE">
+                            Maintenance Invoice
+                          </option>
+                          <option value="RENTAL_AGREEMENT">
+                            Rental Agreement
+                          </option>
                           <option value="LEGAL_DOCUMENT">Legal Document</option>
-                          <option value="IDENTITY_DOCUMENT">Identity Document</option>
+                          <option value="IDENTITY_DOCUMENT">
+                            Identity Document
+                          </option>
                           <option value="OTHER">Other</option>
                         </>
                       )}

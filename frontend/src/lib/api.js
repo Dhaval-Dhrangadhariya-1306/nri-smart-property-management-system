@@ -27,6 +27,7 @@ export const unwrap = (response) =>
 export const getArray = (value) => {
   if (Array.isArray(value)) return value;
   if (!value || typeof value !== "object") return [];
+
   for (const key of [
     "items",
     "results",
@@ -35,6 +36,8 @@ export const getArray = (value) => {
     "documents",
     "notifications",
     "requests",
+    "maintenanceRequests",
+    "maintenance",
     "vendors",
     "caretakers",
     "assignments",
@@ -47,6 +50,7 @@ export const getArray = (value) => {
   ]) {
     if (Array.isArray(value[key])) return value[key];
   }
+
   return [];
 };
 export const errorMessage = (error) => {
