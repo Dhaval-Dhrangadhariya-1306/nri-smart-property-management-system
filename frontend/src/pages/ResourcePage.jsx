@@ -56,11 +56,12 @@ const configs = {
     button: "New Request",
     empty: "No maintenance requests found. Create a request to get started.",
     fields: [
+      ["propertyId", "Property"],
       ["title", "Request Title"],
       ["category", "Category"],
-      ["description", "Description"],
-      ["propertyId", "Property ID"],
       ["priority", "Priority"],
+      ["description", "Description"],
+      ["notes", "Additional Notes"],
     ],
     columns: [
       ["title", "Request"],
@@ -363,11 +364,41 @@ export default function ResourcePage({ type }) {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({});
   const [notice, setNotice] = useState("");
+  const [availableProperties, setAvailableProperties] = useState([]);
 
   const canCreate =
     Boolean(cfg.create) &&
     (isOwnerOrAdmin ||
       (isCaretaker && ["maintenance", "inspections"].includes(type)));
+
+  const loadAvailableProperties = useCallback(async () => {
+    try {
+      if (isCaretaker) {
+        const response = await api.get("/caretakers/my-properties");
+        const result = unwrap(response);
+        const list = extractAssignedProperties(result);
+        setAvailableProperties(list);
+      } else if (isOwnerOrAdmin) {
+        const response = await api.get("/properties/my");
+        const result = unwrap(response);
+        const list = getArray(result).filter(
+          (p) => p && p._id && p.status !== "ARCHIVED" && p.isActive !== false,
+        );
+        setAvailableProperties(list);
+      }
+    } catch {
+      setAvailableProperties([]);
+    }
+  }, [isCaretaker, isOwnerOrAdmin]);
+
+  useEffect(() => {
+    if (
+      canCreate &&
+      ["maintenance", "inspections", "expenses", "documents", "monitoring"].includes(type)
+    ) {
+      loadAvailableProperties();
+    }
+  }, [canCreate, loadAvailableProperties, type]);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -439,12 +470,23 @@ export default function ResourcePage({ type }) {
       return;
     }
 
+    if (
+      ["maintenance", "inspections", "expenses", "documents", "monitoring"].includes(type) &&
+      availableProperties.length === 0
+    ) {
+      loadAvailableProperties();
+    }
+
     let initial = {};
 
     if (type === "maintenance") {
       initial = {
+        propertyId: availableProperties.length === 1 ? (availableProperties[0]._id || availableProperties[0].id) : "",
         priority: "MEDIUM",
         category: "PLUMBING",
+        title: "",
+        description: "",
+        notes: "",
       };
     } else if (type === "properties") {
       initial = {
@@ -491,62 +533,95 @@ export default function ResourcePage({ type }) {
     setError("");
 
     try {
-      const payload = { ...form };
+      let payload;
 
-      if (payload.amount !== undefined && payload.amount !== "") {
-        payload.amount = Number(payload.amount);
-      }
-
-      for (const key of [
-        "propertyType",
-        "priority",
-        "severity",
-        "category",
-        "eventType",
-        "overallCondition",
-        "securityStatus",
-        "electricalStatus",
-        "plumbingStatus",
-        "cleanliness",
-      ]) {
-        if (payload[key]) {
-          payload[key] = String(payload[key]).toUpperCase();
+      if (type === "maintenance") {
+        const propertyId = String(form.propertyId || "").trim();
+        if (!propertyId) {
+          throw new Error("Please select a property.");
         }
-      }
+        if (!form.title || !String(form.title).trim()) {
+          throw new Error("Please enter a title.");
+        }
+        if (!form.description || !String(form.description).trim()) {
+          throw new Error("Please enter a description.");
+        }
 
-      if (type === "properties") {
-        payload.address = {
-          addressLine1: payload.addressLine1,
-          city: payload.city,
-          state: payload.state,
-          country: payload.country || "India",
-          postalCode: payload.postalCode,
+        payload = {
+          propertyId,
+          title: String(form.title).trim(),
+          description: String(form.description).trim(),
+          category: String(form.category || "PLUMBING").toUpperCase(),
+          priority: String(form.priority || "MEDIUM").toUpperCase(),
         };
 
-        delete payload.addressLine1;
-        delete payload.city;
-        delete payload.state;
-        delete payload.country;
-        delete payload.postalCode;
-      }
+        if (form.notes && String(form.notes).trim()) {
+          payload.notes = String(form.notes).trim();
+        }
 
-      if (type === "documents") {
-        payload.fileUrl =
-          payload.fileUrl ||
-          "https://storage.estatepro.local/docs/" + Date.now();
+        // Strictly do not send untrusted fields
+        delete payload.reportedBy;
+        delete payload.assignedCaretaker;
+        delete payload.assignedVendor;
+        delete payload.status;
+      } else {
+        payload = { ...form };
 
-        payload.originalFileName =
-          payload.originalFileName || (payload.title || "document") + ".pdf";
+        if (payload.amount !== undefined && payload.amount !== "") {
+          payload.amount = Number(payload.amount);
+        }
 
-        payload.fileType = payload.fileType || "application/pdf";
+        for (const key of [
+          "propertyType",
+          "priority",
+          "severity",
+          "category",
+          "eventType",
+          "overallCondition",
+          "securityStatus",
+          "electricalStatus",
+          "plumbingStatus",
+          "cleanliness",
+        ]) {
+          if (payload[key]) {
+            payload[key] = String(payload[key]).toUpperCase();
+          }
+        }
 
-        payload.fileSize = payload.fileSize ? Number(payload.fileSize) : 102400;
+        if (type === "properties") {
+          payload.address = {
+            addressLine1: payload.addressLine1,
+            city: payload.city,
+            state: payload.state,
+            country: payload.country || "India",
+            postalCode: payload.postalCode,
+          };
 
-        payload.category = (
-          payload.category ||
-          payload.documentType ||
-          "OTHER"
-        ).toUpperCase();
+          delete payload.addressLine1;
+          delete payload.city;
+          delete payload.state;
+          delete payload.country;
+          delete payload.postalCode;
+        }
+
+        if (type === "documents") {
+          payload.fileUrl =
+            payload.fileUrl ||
+            "https://storage.estatepro.local/docs/" + Date.now();
+
+          payload.originalFileName =
+            payload.originalFileName || (payload.title || "document") + ".pdf";
+
+          payload.fileType = payload.fileType || "application/pdf";
+
+          payload.fileSize = payload.fileSize ? Number(payload.fileSize) : 102400;
+
+          payload.category = (
+            payload.category ||
+            payload.documentType ||
+            "OTHER"
+          ).toUpperCase();
+        }
       }
 
       await api.post(cfg.create, payload);
@@ -945,12 +1020,53 @@ export default function ResourcePage({ type }) {
               of the backend API.
             </p>
 
+            {error && (
+              <div className="error-banner" style={{ margin: "12px 0" }}>
+                <AlertCircle size={17} />
+                <span>{error}</span>
+              </div>
+            )}
+
             <div className="modal-fields">
               {(cfg.fields || []).map(([key, label]) => (
                 <label key={key}>
                   {label}
 
-                  {key === "priority" ? (
+                  {key === "propertyId" ? (
+                    availableProperties.length > 0 || isCaretaker || type === "maintenance" ? (
+                      <select
+                        value={form[key] || ""}
+                        onChange={(event) => updateField(key, event.target.value)}
+                        required
+                      >
+                        <option value="">
+                          {availableProperties.length === 0
+                            ? isCaretaker
+                              ? "No properties assigned to you"
+                              : "No active properties found"
+                            : "Select a property..."}
+                        </option>
+                        {availableProperties.map((p) => {
+                          const pid = String(p._id || p.id);
+                          const title = p.title || p.name || pid;
+                          const city = p.address?.city ? ` (${p.address.city})` : "";
+                          return (
+                            <option key={pid} value={pid}>
+                              {title}{city}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={form[key] || ""}
+                        onChange={(event) => updateField(key, event.target.value)}
+                        placeholder="Enter property ID"
+                        required
+                      />
+                    )
+                  ) : key === "priority" ? (
                     <select
                       value={form[key] || "MEDIUM"}
                       onChange={(event) => updateField(key, event.target.value)}

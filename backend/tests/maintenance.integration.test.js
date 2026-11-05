@@ -626,3 +626,219 @@ test("maintenance lookup returns 404 for an unknown valid ID", async () => {
   assert.equal(result.status, 404, JSON.stringify(result.body));
   assert.equal(result.body.success, false);
 });
+
+// ============================================================
+// CARETAKER MAINTENANCE CREATION & VISIBILITY TESTS
+// ============================================================
+
+let caretakerCreatedRequestId;
+
+test("caretaker can create a maintenance request for an actively assigned property", async () => {
+  const payload = {
+    propertyId,
+    title: "Caretaker Plumbing Issue",
+    description: "Leaking pipe identified during routine walkthrough",
+    category: "PLUMBING",
+    priority: "HIGH",
+    notes: "Requires urgent attention",
+  };
+
+  const result = await request("/api/maintenance", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify(payload),
+  });
+
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  assert.equal(result.body.success, true);
+  assert.equal(result.body.data.maintenanceRequest.title, payload.title);
+  assert.equal(result.body.data.maintenanceRequest.category, "PLUMBING");
+  assert.equal(result.body.data.maintenanceRequest.priority, "HIGH");
+  assert.equal(result.body.data.maintenanceRequest.status, "ASSIGNED");
+  assert.equal(
+    result.body.data.maintenanceRequest.assignedCaretaker._id,
+    caretakerId,
+  );
+  assert.equal(
+    result.body.data.maintenanceRequest.reportedBy._id,
+    caretakerId,
+  );
+
+  caretakerCreatedRequestId = result.body.data.maintenanceRequest._id;
+  assert.ok(caretakerCreatedRequestId);
+});
+
+test("caretaker cannot create a maintenance request for an unassigned property", async () => {
+  const unassignedProp = await request("/api/properties", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify(propertyPayload()),
+  });
+  assert.equal(unassignedProp.status, 201);
+  const unassignedPropId = unassignedProp.body.data.property._id;
+
+  const result = await request("/api/maintenance", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      propertyId: unassignedPropId,
+      title: "Unauthorized Request",
+      description: "Caretaker attempting to report on unassigned property",
+      category: "ELECTRICAL",
+      priority: "MEDIUM",
+    }),
+  });
+
+  assert.equal(result.status, 403, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("caretaker cannot create a maintenance request for another caretaker's property", async () => {
+  const result = await request("/api/maintenance", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      propertyId: secondCaretakerPropertyId,
+      title: "Cross-Caretaker Unauthorized Request",
+      description: "Caretaker attempting to report on another caretaker's property",
+      category: "SECURITY",
+      priority: "HIGH",
+    }),
+  });
+
+  assert.equal(result.status, 403, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("caretaker cannot create a maintenance request for another owner's property", async () => {
+  const result = await request("/api/maintenance", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      propertyId: otherOwnerPropertyId,
+      title: "Other Owner Unauthorized Request",
+      description: "Caretaker attempting to report on another owner's property",
+      category: "CLEANING",
+      priority: "LOW",
+    }),
+  });
+
+  assert.equal(result.status, 403, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("caretaker cannot create a maintenance request for an archived property", async () => {
+  const newProp = await request("/api/properties", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify(propertyPayload()),
+  });
+  assert.equal(newProp.status, 201);
+  const archivedPropId = newProp.body.data.property._id;
+
+  await request("/api/caretakers/assign", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({
+      propertyId: archivedPropId,
+      caretakerId,
+    }),
+  });
+
+  const deleteResult = await request(`/api/properties/${archivedPropId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(deleteResult.status, 200);
+
+  const result = await request("/api/maintenance", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      propertyId: archivedPropId,
+      title: "Archived Property Maintenance Request",
+      description: "Should be rejected because property is archived",
+      category: "APPLIANCE",
+      priority: "LOW",
+    }),
+  });
+
+  assert.equal(result.status, 404, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("caretaker cannot assign a vendor upon creating a maintenance request", async () => {
+  const result = await request("/api/maintenance", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${caretakerToken}` },
+    body: JSON.stringify({
+      propertyId,
+      title: "Caretaker Trying Vendor Assignment",
+      description: "Caretakers must not have permission to assign vendors",
+      category: "PLUMBING",
+      priority: "HIGH",
+      vendorId: "64a000000000000000000001",
+    }),
+  });
+
+  assert.equal(result.status, 403, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});
+
+test("owner can see caretaker-reported requests in their maintenance list", async () => {
+  const result = await request("/api/maintenance/my", {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.success, true);
+  assert.ok(
+    result.body.data.maintenanceRequests.some(
+      (item) => item._id === caretakerCreatedRequestId,
+    ),
+    "Owner's maintenance list must include requests reported by caretakers on their properties",
+  );
+});
+
+test("owner can view details of caretaker-reported request on their property", async () => {
+  const result = await request(
+    `/api/maintenance/${caretakerCreatedRequestId}`,
+    {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+    },
+  );
+
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.success, true);
+  assert.equal(
+    result.body.data.maintenanceRequest._id,
+    caretakerCreatedRequestId,
+  );
+});
+
+test("another owner cannot see caretaker-reported requests belonging to first owner", async () => {
+  const result = await request("/api/maintenance/my", {
+    headers: { Authorization: `Bearer ${otherOwnerToken}` },
+  });
+
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.success, true);
+  assert.ok(
+    !result.body.data.maintenanceRequests.some(
+      (item) => item._id === caretakerCreatedRequestId,
+    ),
+    "Other owner must not see requests belonging to another owner's properties",
+  );
+});
+
+test("another owner cannot view details of requests belonging to first owner", async () => {
+  const result = await request(
+    `/api/maintenance/${caretakerCreatedRequestId}`,
+    {
+      headers: { Authorization: `Bearer ${otherOwnerToken}` },
+    },
+  );
+
+  assert.equal(result.status, 404, JSON.stringify(result.body));
+  assert.equal(result.body.success, false);
+});

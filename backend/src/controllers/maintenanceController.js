@@ -192,22 +192,105 @@ const createMaintenanceRequest = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
-    // Property ownership validation
+    // Property and authorization validation
     // --------------------------------------------------------
 
-    const property = await Property.findOne({
-      _id: propertyId,
-      owner: req.user.userId,
-      isActive: true,
-      status: "ACTIVE",
-    });
+    let property = null;
+    let assignedCaretaker = null;
 
-    if (!property) {
+    if (req.user.role === "CARETAKER") {
+      // 1. Verify that the caretaker has an ACTIVE assignment for this property
+      const assignment = await CaretakerAssignment.findOne({
+        property: propertyId,
+        caretaker: req.user.userId,
+        status: "ACTIVE",
+      });
+
+      if (!assignment) {
+        return next(
+          createError("You are not actively assigned to this property", 403),
+        );
+      }
+
+      // 2. Verify that the property is active and not archived
+      property = await Property.findOne({
+        _id: propertyId,
+        isActive: true,
+        status: "ACTIVE",
+      });
+
+      if (!property) {
+        return next(
+          createError("Property not found or is no longer active", 404),
+        );
+      }
+
+      // 3. Caretakers cannot assign vendors upon creation
+      if (vendorId) {
+        return next(createError("Caretakers cannot assign vendors", 403));
+      }
+
+      // 4. Set assigned caretaker to this authenticated caretaker
+      assignedCaretaker = req.user.userId;
+    } else if (req.user.role === "NRI_OWNER") {
+      property = await Property.findOne({
+        _id: propertyId,
+        owner: req.user.userId,
+        isActive: true,
+        status: "ACTIVE",
+      });
+
+      if (!property) {
+        return next(
+          createError(
+            "Property not found or you do not have permission to manage it",
+            404,
+          ),
+        );
+      }
+
+      const assignment = await CaretakerAssignment.findOne({
+        property: propertyId,
+        status: "ACTIVE",
+      }).populate("caretaker", "name email role isActive");
+
+      if (
+        assignment &&
+        assignment.caretaker &&
+        assignment.caretaker.role === "CARETAKER" &&
+        assignment.caretaker.isActive
+      ) {
+        assignedCaretaker = assignment.caretaker._id;
+      }
+    } else if (req.user.role === "ADMIN") {
+      property = await Property.findOne({
+        _id: propertyId,
+        isActive: true,
+        status: "ACTIVE",
+      });
+
+      if (!property) {
+        return next(
+          createError("Property not found or is no longer active", 404),
+        );
+      }
+
+      const assignment = await CaretakerAssignment.findOne({
+        property: propertyId,
+        status: "ACTIVE",
+      }).populate("caretaker", "name email role isActive");
+
+      if (
+        assignment &&
+        assignment.caretaker &&
+        assignment.caretaker.role === "CARETAKER" &&
+        assignment.caretaker.isActive
+      ) {
+        assignedCaretaker = assignment.caretaker._id;
+      }
+    } else {
       return next(
-        createError(
-          "Property not found or you do not have permission to manage it",
-          404,
-        ),
+        createError("You do not have permission to perform this action", 403),
       );
     }
 
@@ -233,34 +316,18 @@ const createMaintenanceRequest = async (req, res, next) => {
     }
 
     // --------------------------------------------------------
-    // Find currently assigned caretaker
-    // --------------------------------------------------------
-
-    const assignment = await CaretakerAssignment.findOne({
-      property: propertyId,
-      status: "ACTIVE",
-    }).populate("caretaker", "name email role isActive");
-
-    let assignedCaretaker = null;
-
-    if (
-      assignment &&
-      assignment.caretaker &&
-      assignment.caretaker.role === "CARETAKER" &&
-      assignment.caretaker.isActive
-    ) {
-      assignedCaretaker = assignment.caretaker._id;
-    }
-
-    // --------------------------------------------------------
     // Validate vendor
     // --------------------------------------------------------
 
-    const vendor = await validateVendorForOwner(
-      vendorId,
-      req.user.userId,
-      category,
-    );
+    let vendor = null;
+
+    if (vendorId && (req.user.role === "NRI_OWNER" || req.user.role === "ADMIN")) {
+      vendor = await validateVendorForOwner(
+        vendorId,
+        property.owner,
+        category,
+      );
+    }
 
     // --------------------------------------------------------
     // Validate costs/images/notes
@@ -375,13 +442,28 @@ const createMaintenanceRequest = async (req, res, next) => {
 
 const getOwnerMaintenanceRequests = async (req, res, next) => {
   try {
-    const requests = await MaintenanceRequest.find({
-      reportedBy: req.user.userId,
-    })
+    let filter = {};
+
+    if (req.user.role === "ADMIN") {
+      filter = {};
+    } else {
+      const ownerProperties = await Property.find({
+        owner: req.user.userId,
+      }).select("_id");
+
+      const propertyIds = ownerProperties.map((property) => property._id);
+
+      filter = {
+        property: { $in: propertyIds },
+      };
+    }
+
+    const requests = await MaintenanceRequest.find(filter)
       .populate(
         "property",
         "title propertyType address status occupancy condition health",
       )
+      .populate("reportedBy", "name email role")
       .populate("assignedCaretaker", "name email role isActive")
       .populate(
         "assignedVendor",
@@ -523,12 +605,23 @@ const assignVendorToMaintenance = async (req, res, next) => {
     // Find owner's maintenance request
     // --------------------------------------------------------
 
-    const request = await MaintenanceRequest.findOne({
-      _id: requestId,
-      reportedBy: req.user.userId,
-    });
+    const request = await MaintenanceRequest.findById(requestId).populate(
+      "property",
+      "owner",
+    );
 
     if (!request) {
+      return next(
+        createError("Maintenance request not found or access denied", 404),
+      );
+    }
+
+    const isPropertyOwner =
+      request.property?.owner?.toString() === req.user.userId;
+    const isReporter = request.reportedBy?.toString() === req.user.userId;
+    const isAdmin = req.user.role === "ADMIN";
+
+    if (!isAdmin && !isPropertyOwner && !isReporter) {
       return next(
         createError("Maintenance request not found or access denied", 404),
       );
@@ -550,9 +643,11 @@ const assignVendorToMaintenance = async (req, res, next) => {
     // Validate new vendor
     // --------------------------------------------------------
 
+    const vendorOwnerId = request.property?.owner || req.user.userId;
+
     const vendor = await validateVendorForOwner(
       vendorId,
-      req.user.userId,
+      vendorOwnerId,
       request.category,
     );
 
@@ -903,22 +998,27 @@ const cancelMaintenanceRequest = async (req, res, next) => {
     // Ownership / ADMIN access
     // --------------------------------------------------------
 
-    const requestQuery = {
-      _id: requestId,
-    };
-
-    // Owners can cancel only their own requests.
-    // Admins can manage any maintenance request.
-    if (req.user.role === "NRI_OWNER") {
-      requestQuery.reportedBy = req.user.userId;
-    }
-
-    const request = await MaintenanceRequest.findOne(requestQuery);
+    const request = await MaintenanceRequest.findById(requestId).populate(
+      "property",
+      "owner",
+    );
 
     if (!request) {
       return next(
         createError("Maintenance request not found or access denied", 404),
       );
+    }
+
+    if (req.user.role === "NRI_OWNER") {
+      const isPropertyOwner =
+        request.property?.owner?.toString() === req.user.userId;
+      const isReporter = request.reportedBy?.toString() === req.user.userId;
+
+      if (!isPropertyOwner && !isReporter) {
+        return next(
+          createError("Maintenance request not found or access denied", 404),
+        );
+      }
     }
 
     // --------------------------------------------------------
@@ -1010,20 +1110,10 @@ const getMaintenanceRequestById = async (req, res, next) => {
       return next(createError("Invalid maintenance request ID"));
     }
 
-    const request = await MaintenanceRequest.findOne({
-      _id: requestId,
-      $or: [
-        {
-          reportedBy: req.user.userId,
-        },
-        {
-          assignedCaretaker: req.user.userId,
-        },
-      ],
-    })
+    const request = await MaintenanceRequest.findById(requestId)
       .populate(
         "property",
-        "title propertyType address status occupancy condition health",
+        "title propertyType address status occupancy condition health owner",
       )
       .populate("reportedBy", "name email role")
       .populate("assignedCaretaker", "name email role isActive")
@@ -1037,6 +1127,23 @@ const getMaintenanceRequestById = async (req, res, next) => {
       );
 
     if (!request) {
+      return next(createError("Maintenance request not found", 404));
+    }
+
+    const isReporter =
+      request.reportedBy?._id?.toString() === req.user.userId ||
+      request.reportedBy?.toString() === req.user.userId;
+
+    const isAssignedCaretaker =
+      request.assignedCaretaker?._id?.toString() === req.user.userId ||
+      request.assignedCaretaker?.toString() === req.user.userId;
+
+    const isPropertyOwner =
+      request.property?.owner?.toString() === req.user.userId;
+
+    const isAdmin = req.user.role === "ADMIN";
+
+    if (!isAdmin && !isReporter && !isAssignedCaretaker && !isPropertyOwner) {
       return next(createError("Maintenance request not found", 404));
     }
 

@@ -30,7 +30,7 @@ const router = express.Router();
 router.use(protect);
 
 // ============================================================
-// OWNER / ADMIN ROUTES
+// CREATE MAINTENANCE REQUEST
 // ============================================================
 
 /**
@@ -39,7 +39,13 @@ router.use(protect);
  *   post:
  *     operationId: createMaintenanceRequest
  *     summary: Create a maintenance request
- *     description: Creates a maintenance request for a property.
+ *     description: >
+ *       Creates a maintenance request for an authorized property.
+ *       NRI owners and administrators can create requests according
+ *       to their existing permissions. Caretakers can create requests
+ *       only for properties to which they have an active assignment.
+ *       Caretaker identity and assignment information must be derived
+ *       and validated by the backend.
  *     tags: [Maintenance]
  *     security:
  *       - bearerAuth: []
@@ -49,33 +55,70 @@ router.use(protect);
  *         application/json:
  *           schema:
  *             type: object
- *             description: Maintenance request data accepted by the controller.
- *             additionalProperties: true
+ *             required:
+ *               - propertyId
+ *               - title
+ *               - description
+ *               - category
  *             properties:
  *               propertyId:
  *                 type: string
  *                 description: MongoDB ID of the property.
  *               title:
  *                 type: string
+ *                 minLength: 3
+ *                 maxLength: 150
  *               description:
  *                 type: string
+ *                 minLength: 5
+ *                 maxLength: 2000
  *               category:
  *                 type: string
+ *                 enum:
+ *                   - ELECTRICAL
+ *                   - PLUMBING
+ *                   - SECURITY
+ *                   - STRUCTURAL
+ *                   - CLEANING
+ *                   - APPLIANCE
+ *                   - HVAC
+ *                   - PEST_CONTROL
+ *                   - OTHER
  *               priority:
  *                 type: string
+ *                 enum: [LOW, MEDIUM, HIGH, URGENT]
+ *                 default: MEDIUM
  *               notes:
  *                 type: string
+ *                 maxLength: 2000
+ *           example:
+ *             propertyId: "6aa97840f532befd1c175245"
+ *             title: "Bathroom Water Leakage"
+ *             description: "Water is leaking from the bathroom pipe."
+ *             category: "PLUMBING"
+ *             priority: "HIGH"
+ *             notes: "Reported during property inspection."
  *     responses:
  *       201:
- *         description: Maintenance request created successfully
+ *         description: Maintenance request created successfully.
  *       400:
- *         description: Invalid or incomplete request data
+ *         description: Invalid or incomplete request data.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required or token invalid.
  *       403:
- *         description: Insufficient permissions
+ *         description: User is not authorized for the selected property.
+ *       404:
+ *         description: Property not found.
  */
-router.post("/", authorize("NRI_OWNER", "ADMIN"), createMaintenanceRequest);
+router.post(
+  "/",
+  authorize("NRI_OWNER", "ADMIN", "CARETAKER"),
+  createMaintenanceRequest,
+);
+
+// ============================================================
+// OWNER / ADMIN ROUTES
+// ============================================================
 
 /**
  * @swagger
@@ -89,13 +132,17 @@ router.post("/", authorize("NRI_OWNER", "ADMIN"), createMaintenanceRequest);
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Maintenance requests retrieved successfully
+ *         description: Maintenance requests retrieved successfully.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Insufficient permissions
+ *         description: Owner or administrator role required.
  */
-router.get("/my", authorize("NRI_OWNER", "ADMIN"), getOwnerMaintenanceRequests);
+router.get(
+  "/my",
+  authorize("NRI_OWNER", "ADMIN"),
+  getOwnerMaintenanceRequests,
+);
 
 /**
  * @swagger
@@ -103,7 +150,6 @@ router.get("/my", authorize("NRI_OWNER", "ADMIN"), getOwnerMaintenanceRequests);
  *   get:
  *     operationId: getPropertyMaintenanceRequests
  *     summary: Get maintenance requests for a property
- *     description: Retrieves maintenance requests associated with the specified property.
  *     tags: [Maintenance]
  *     security:
  *       - bearerAuth: []
@@ -113,18 +159,17 @@ router.get("/my", authorize("NRI_OWNER", "ADMIN"), getOwnerMaintenanceRequests);
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the property.
  *     responses:
  *       200:
- *         description: Property maintenance requests retrieved successfully
+ *         description: Property maintenance requests retrieved successfully.
  *       400:
- *         description: Invalid property ID
+ *         description: Invalid property ID.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Insufficient permissions
+ *         description: Owner or administrator role required.
  *       404:
- *         description: Property not found
+ *         description: Property not found.
  */
 router.get(
   "/property/:propertyId",
@@ -138,7 +183,6 @@ router.get(
  *   patch:
  *     operationId: assignVendorToMaintenance
  *     summary: Assign or change a maintenance vendor
- *     description: Assigns a vendor to a maintenance request or changes its vendor.
  *     tags: [Maintenance]
  *     security:
  *       - bearerAuth: []
@@ -148,7 +192,6 @@ router.get(
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the maintenance request.
  *     requestBody:
  *       required: true
  *       content:
@@ -160,18 +203,17 @@ router.get(
  *             properties:
  *               vendorId:
  *                 type: string
- *                 description: MongoDB ID of the vendor.
  *     responses:
  *       200:
- *         description: Vendor assignment updated successfully
+ *         description: Vendor assignment updated successfully.
  *       400:
- *         description: Invalid request or vendor ID
+ *         description: Invalid request or vendor ID.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Insufficient permissions
+ *         description: Owner or administrator role required.
  *       404:
- *         description: Maintenance request or vendor not found
+ *         description: Maintenance request or vendor not found.
  */
 router.patch(
   "/:requestId/vendor",
@@ -185,7 +227,6 @@ router.patch(
  *   patch:
  *     operationId: cancelMaintenanceRequest
  *     summary: Cancel a maintenance request
- *     description: Cancels a maintenance request according to the application's business rules.
  *     tags: [Maintenance]
  *     security:
  *       - bearerAuth: []
@@ -195,18 +236,17 @@ router.patch(
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the maintenance request.
  *     responses:
  *       200:
- *         description: Maintenance request cancellation processed successfully
+ *         description: Maintenance request cancellation processed successfully.
  *       400:
- *         description: Request cannot be cancelled or data is invalid
+ *         description: Request cannot be cancelled.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Insufficient permissions
+ *         description: Owner or administrator role required.
  *       404:
- *         description: Maintenance request not found
+ *         description: Maintenance request not found.
  */
 router.patch(
   "/:requestId/cancel",
@@ -230,11 +270,11 @@ router.patch(
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Caretaker maintenance requests retrieved successfully
+ *         description: Caretaker maintenance requests retrieved successfully.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Caretaker role required
+ *         description: Caretaker role required.
  */
 router.get(
   "/caretaker/my",
@@ -248,7 +288,7 @@ router.get(
  *   patch:
  *     operationId: updateMaintenanceStatus
  *     summary: Update maintenance status
- *     description: Updates the status of a maintenance request.
+ *     description: Updates the status of a maintenance request according to caretaker authorization rules.
  *     tags: [Maintenance]
  *     security:
  *       - bearerAuth: []
@@ -258,32 +298,29 @@ router.get(
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the maintenance request.
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             description: Status update data accepted by the controller.
- *             additionalProperties: true
  *             properties:
  *               status:
  *                 type: string
- *                 example: IN_PROGRESS
+ *                 enum: [IN_PROGRESS, ON_HOLD, COMPLETED]
  *               notes:
  *                 type: string
  *     responses:
  *       200:
- *         description: Maintenance status updated successfully
+ *         description: Maintenance status updated successfully.
  *       400:
- *         description: Invalid status or request data
+ *         description: Invalid status or request data.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Caretaker role required or operation not permitted
+ *         description: Caretaker is not authorized for this request.
  *       404:
- *         description: Maintenance request not found
+ *         description: Maintenance request not found.
  */
 router.patch(
   "/:requestId/status",
@@ -301,7 +338,7 @@ router.patch(
  *   get:
  *     operationId: getMaintenanceRequestById
  *     summary: Get a maintenance request by ID
- *     description: Retrieves the details of a maintenance request.
+ *     description: Retrieves a maintenance request after backend authorization checks.
  *     tags: [Maintenance]
  *     security:
  *       - bearerAuth: []
@@ -311,18 +348,17 @@ router.patch(
  *         required: true
  *         schema:
  *           type: string
- *         description: MongoDB ID of the maintenance request.
  *     responses:
  *       200:
- *         description: Maintenance request retrieved successfully
+ *         description: Maintenance request retrieved successfully.
  *       400:
- *         description: Invalid request ID
+ *         description: Invalid request ID.
  *       401:
- *         description: Authentication required or token invalid
+ *         description: Authentication required.
  *       403:
- *         description: Insufficient permissions
+ *         description: User is not authorized to view this request.
  *       404:
- *         description: Maintenance request not found
+ *         description: Maintenance request not found.
  */
 router.get(
   "/:requestId",
